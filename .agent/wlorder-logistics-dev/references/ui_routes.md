@@ -7,48 +7,18 @@
 - 导航：**左侧固定侧边栏（Sidebar）**，内容区占满右侧剩余宽度
 
 ## 路由表
+- **PC 控制台 (SPA)**: 所有主模块（订单、发货、看板、财务）合并在主路由 `/` 下，通过 `ui.tab_panels` 逻辑切换，点击侧边栏**不触发浏览器刷新**。
 
-| 路由 | 函数 | 终端 | 描述 |
+| 路由 | 模式 | 终端 | 描述 |
 |---|---|---|---|
-| `/` | `index_page()` | PC | 订单管理：录入 + 列表 |
-| `/shipments` | `shipments_page(order_id)` | PC | 发货调度：派发 + 台账 |
-| `/shipments?order_id=XXX` | 同上 | PC | 带订单参数的派发模式 |
-| `/driver_confirm?id=X&token=Y` | `driver_confirm_page(id, token)` | Mobile | 司机扫码确认（无 Header） |
-| `/dashboard` | *待开发* | PC | 数据看板 |
-| `/finance` | *待开发* | PC | 费用核算台账 |
+| `/` | SPA | PC | 总控制台：通过侧边栏点击切换 Content 面板 |
+| `/driver_confirm` | 独立页面 | Mobile | 司机扫码确认页（二维码直达） |
+| `/print` | 独立页面 | PC | 打印预览页（新窗口弹出，带打印样式） |
 
-## 全局侧边栏组件 (Sidebar)
+## 全局导航样式 (Sidebar & Header)
 
-```python
-def create_sidebar(active: str):
-    """
-    创建左侧固定侧边栏。
-    active: 当前激活的路由名 ('orders' | 'shipments' | 'dashboard' | 'finance')
-    """
-    # 侧边栏容器: bg-dark(深色) 宽240px 固定高全屏
-    with ui.left_drawer(fixed=True).classes('bg-gray-900 text-white w-60 min-h-screen flex flex-col'):
-        # Logo + 系统名
-        with ui.row().classes('items-center gap-3 p-6 border-b border-gray-700'):
-            ui.icon('local_shipping', size='lg', color='blue-400')
-            ui.label('极速物流').classes('text-lg font-bold text-white')
-
-        with ui.column().classes('flex-grow p-3 gap-1'):
-            MENU = [
-                ('orders',    '📝', '订单管理',  '/'),
-                ('shipments', '📦', '发货调度',  '/shipments'),
-                ('dashboard', '📊', '数据看板',  '/dashboard'),
-                ('finance',   '💰', '费用核算',  '/finance'),
-            ]
-            for key, icon, label, href in MENU:
-                is_active = (key == active)
-                with ui.link(target=href).classes('w-full no-underline'):
-                    with ui.row().classes(
-                        f'w-full items-center gap-3 px-4 py-3 rounded-lg cursor-pointer '
-                        f'{"bg-blue-600 text-white" if is_active else "text-gray-400 hover:bg-gray-700 hover:text-white"}'
-                    ):
-                        ui.label(icon).classes('text-lg')
-                        ui.label(label).classes('font-medium')
-```
+- **Header**: 位于顶部的白色工具栏，包含一个左侧的 `menu` 按钮，通过 `left_drawer.toggle()` 实现侧边栏折叠。
+- **Sidebar**: 深色侧边栏，支持通过 Header 按钮或侧边栏底部的“收起菜单”按钮进行隐藏。
 
 > **注意**：在 NiceGUI 中，侧边栏使用 `ui.left_drawer` 组件实现；页面函数需调用 `create_sidebar(active='当前页key')` 来激活当前菜单项。
 
@@ -91,10 +61,12 @@ Dialog: 新建订单（居中模态, min-w-[480px]）
     │   ├── 客户名称* (全宽 Input)
     │   ├── 货物品类* (全宽 Input)
     │   ├── 数量(#件)* (Number, min=1)
-    │   └── 收货地址* (全宽 Input)
+    │   ├── 收货地址* (全宽 Input)
+    │   ├── 分割线 + 提示信息
+    │   └── **发货模式选择*** (Radio: 整车 | 零单)
     └── 操作区 (Row, 右对齐):
         ├── 取消 (描边按钮)
-        └── 确认生单 (实心蓝色主按钮)
+        └── 确认并立即生单 (实心蓝色主按钮)
 ```
 
 **筛选器规范**：
