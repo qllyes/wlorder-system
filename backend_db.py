@@ -89,20 +89,21 @@ def _generate_id(prefix: str) -> str:
     return f"{prefix}-{ts}-{suffix}"
 
 
-async def create_shipment(order_id: str, ship_type: str) -> str | None:
+async def create_shipment(
+    customer_name: str,
+    product_name: str,
+    quantity: int,
+    delivery_address: str,
+    ship_type: str
+) -> str:
     """
-    创建发货单。
-    - 整车: 状态=未订车, 生成 driver_token
-    - 零单: 状态=待填写
-    同时将订单状态更新为 '已派发'。
+    新建发货单（脱离 orders 表独立运行）。
+    初始状态: 整车与零单均默认为 '未订车'。
     """
-    order = await get_order_by_id(order_id)
-    if not order:
-        return None
-
-    status = "未订车" if ship_type == "整车" else "待填写"
+    status = "未订车"
     token = uuid.uuid4().hex if ship_type == "整车" else None
     shipment_id = _generate_id("SHIP")
+    order_id = _generate_id("ORD") # 暂时保留结构兼容性，后续若需可去
 
     async with get_conn() as conn:
         await conn.execute(
@@ -113,17 +114,13 @@ async def create_shipment(order_id: str, ship_type: str) -> str | None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 shipment_id, order_id, ship_type, status,
-                order["customer_name"], order["delivery_address"],
-                order["product_name"], order["quantity"],
+                customer_name, delivery_address, product_name, quantity,
                 token,
             ),
         )
-        await conn.execute(
-            "UPDATE orders SET status='已派发' WHERE order_id=?",
-            (order_id,),
-        )
         await conn.commit()
     return shipment_id
+
 
 
 # ── 整车状态流转 ──
@@ -249,7 +246,7 @@ async def get_dashboard_stats() -> dict:
         # 积压未发车
         async with conn.execute(
             """SELECT COUNT(*) FROM shipments
-               WHERE status IN ('未订车','已订车','待填写')"""
+               WHERE status IN ('未订车','已订车')"""
         ) as cur:
             pending_count = (await cur.fetchone())[0]
 

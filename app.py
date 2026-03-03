@@ -74,175 +74,61 @@ def inject_modern_css():
     ''')
 
 # ════════════════════════════════════════════════
-#  SPA 页面组件：订单管理
+#  SPA 页面组件：发货调度工作台
 # ════════════════════════════════════════════════
 
-async def orders_content():
-    with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 gap-6 mb-12'):
-        # ── 页面顶部行 ──
-        with ui.row().classes('w-full justify-between items-center'):
-            ui.label('订单管理').classes('text-2xl font-bold tracking-tight text-gray-800')
-            
-            # 弹窗内的新建订单表单
-            dlg_new_order = ui.dialog()
-            with dlg_new_order, ui.card().classes('min-w-[480px] p-6'):
-                with ui.row().classes('w-full justify-between items-center mb-4'):
-                    ui.label('📝 新建客户订单').classes('text-lg font-bold')
-                    ui.button(icon='close', on_click=dlg_new_order.close).props('flat round dense')
-                
-                customer_input = ui.input('客户名称*').classes('w-full mb-2')
-                product_input = ui.input('货物品类*').classes('w-full mb-2')
-                qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
-                address_input = ui.input('收货详细地址*').classes('w-full mb-2')
-                
-                # 新增：生单时选择分流模式
-                ui.separator().classes('my-4')
-                ui.label('发货模式选择*').classes('text-xs font-bold text-gray-400 mb-1')
-                mode_choice = ui.radio(['整车', '零单'], value='整车').props('inline')
-                ui.label('提示：生单后将自动在“发货调度”中生成待处理记录').classes('text-[10px] text-blue-500 mb-6')
-                
-                async def submit_order():
-                    if not customer_input.value or not product_input.value or not address_input.value:
-                        ui.notify('请完整填写必填项（带*）', type='warning')
-                        return
-                    
-                    # 1. 创建订单
-                    o_id = f"ORDER-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    await backend_db.create_order(
-                        o_id, customer_input.value, product_input.value,
-                        int(qty_input.value), address_input.value
-                    )
-                    
-                    # 2. 核心补丁：联动创建发货单（自动分流派发）
-                    await backend_db.create_shipment(o_id, mode_choice.value)
-                    
-                    ui.notify(f'订单创建成功，已同步开启【{mode_choice.value}】派发流程', type='positive')
-                    
-                    # 清空并关闭
-                    customer_input.value = ''
-                    product_input.value = ''
-                    qty_input.value = 1
-                    address_input.value = ''
-                    dlg_new_order.close()
-                    order_list_refreshable.refresh()
-
-                with ui.row().classes('w-full justify-end gap-2 mt-4'):
-                    ui.button('取消', on_click=dlg_new_order.close).props('outline text-gray-600 border-gray-300')
-                    ui.button('确认并立即生单', on_click=submit_order, color='primary')
-            
-            ui.button('新建订单', icon='add', on_click=dlg_new_order.open).classes('bg-primary text-white font-bold')
-            
-        # ── 筛选工具栏 ──
-        with ui.card().classes('modern-card w-full p-4 border-l-4 border-l-blue-400'):
-            with ui.row().classes('w-full items-end gap-4'):
-                filter_status = ui.select(
-                    {'全部': '全部', '待发货': '待发货', '已派发': '已派发'}, 
-                    value='全部', 
-                    label='订单状态'
-                ).classes('w-40')
-                filter_start_date = ui.input('开始日期(YYYY-MM-DD)').props('type=date').classes('w-48')
-                filter_end_date = ui.input('结束日期(YYYY-MM-DD)').props('type=date').classes('w-48')
-                filter_keyword = ui.input('货物名称(关键词)').classes('flex-grow')
-                
-                def apply_filters():
-                    order_list_refreshable.refresh()
-                    
-                def reset_filters():
-                    filter_status.value = '全部'
-                    filter_start_date.value = ''
-                    filter_end_date.value = ''
-                    filter_keyword.value = ''
-                    order_list_refreshable.refresh()
-
-                ui.button('搜索', on_click=apply_filters, color='primary')
-                ui.button('重置', on_click=reset_filters, color='grey').props('outline')
-
-        # ── 历史订单列表 ──
-        with ui.card().classes('modern-card w-full p-6'):
-            with ui.row().classes('w-full justify-between items-center mb-4'):
-                ui.label('📋 订单列表').classes('text-lg font-bold')
-                ui.button(icon='refresh', on_click=lambda: order_list_refreshable.refresh()).props('flat round color=primary tooltip="刷新"')
-            
-            @ui.refreshable
-            async def order_list_refreshable():
-                orders = await backend_db.fetch_all_orders()
-                filtered_orders = []
-                for order in orders:
-                    if filter_status.value != '全部' and order['status'] != filter_status.value:
-                        continue
-                    if filter_keyword.value and filter_keyword.value.lower() not in order['product_name'].lower():
-                        continue
-                    order_date = order['created_at'][:10]
-                    if filter_start_date.value and order_date < filter_start_date.value:
-                        continue
-                    if filter_end_date.value and order_date > filter_end_date.value:
-                        continue
-                    filtered_orders.append(order)
-
-                filtered_orders.sort(key=lambda x: x['created_at'], reverse=True)
-                filtered_orders.sort(key=lambda x: x['status'] != '待发货')
-
-                if not filtered_orders:
-                    with ui.column().classes('w-full items-center py-12'):
-                        ui.icon('inbox', size='4xl', color='grey-4').classes('mb-4')
-                        ui.label('暂无符合条件的订单数据').classes('text-gray-400')
-                    return
-                
-                cols = [
-                    {'name': 'order_id', 'label': '订单号', 'field': 'order_id', 'align': 'left'},
-                    {'name': 'customer_name', 'label': '客户名', 'field': 'customer_name', 'align': 'left'},
-                    {'name': 'product_name', 'label': '物品', 'field': 'product_name', 'align': 'left'},
-                    {'name': 'quantity', 'label': '数量', 'field': 'quantity', 'align': 'right'},
-                    {'name': 'status', 'label': '状态', 'field': 'status', 'align': 'center'},
-                    {'name': 'created_at', 'label': '创建时间', 'field': 'created_at', 'align': 'left'},
-                    {'name': 'actions', 'label': '操作', 'align': 'center'},
-                ]
-                with ui.table(columns=cols, rows=filtered_orders, row_key='order_id').classes('w-full') as table:
-                    table.add_slot('body-cell-status', '''
-                        <q-td :props="props">
-                            <q-chip :color="props.row.status === \'待发货\' ? \'orange\' : \'green\'" text-color="white" dense size="sm">
-                                {{ props.row.status }}
-                            </q-chip>
-                        </q-td>
-                    ''')
-                    table.add_slot('body-cell-actions', '''
-                        <q-td :props="props">
-                            <q-btn v-if="props.row.status === \'待发货\'" 
-                                outline dense color="primary" label="补录派发" @click="$parent.$emit('dispatch', props.row)" />
-                            <q-btn v-else flat dense color="grey" label="已派入调度" @click="$parent.$emit('goto_shipment', props.row)" />
-                        </q-td>
-                    ''')
-                    table.on('dispatch', lambda e: switch_to_shipments(e.args["order_id"]))
-                    table.on('goto_shipment', lambda e: switch_to_shipments(None))
-            await order_list_refreshable()
-
-# ════════════════════════════════════════════════
-#  SPA 页面组件：发货调度
-# ════════════════════════════════════════════════
-
-async def shipments_content(selected_order_id: Optional[str] = None):
+async def shipments_content():
     @ui.refreshable
-    async def main_shipments_refreshable(oid: Optional[str] = selected_order_id):
+    async def main_shipments_refreshable():
         with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-6'):
             with ui.row().classes('w-full justify-between items-center'):
                 ui.label('发货单调度与管理').classes('text-2xl font-bold tracking-tight text-gray-800')
-
-            # ── 派发面板 ──
-            if oid:
-                order = await backend_db.get_order_by_id(oid)
-                if order:
-                    with ui.card().classes('modern-card w-full p-6 border-l-4 border-l-blue-500 bg-blue-50/20'):
-                        ui.label(f'正在为临时派发单 [{oid}] 分配发货模式').classes('text-blue-800 font-bold mb-2')
-                        ui.label(f"客户: {order['customer_name']} | 物品: {order['product_name']} | 数量: {order['quantity']}").classes('text-gray-600')
+                
+                # ── 融合后的新建发货单入口 ──
+                dlg_new_shipment = ui.dialog()
+                with dlg_new_shipment, ui.card().classes('min-w-[480px] p-6'):
+                    with ui.row().classes('w-full justify-between items-center mb-4'):
+                        ui.label('📝 新建发货单').classes('text-lg font-bold')
+                        ui.button(icon='close', on_click=dlg_new_shipment.close).props('flat round dense')
+                    
+                    customer_input = ui.input('客户名称*').classes('w-full mb-2')
+                    product_input = ui.input('货物品类*').classes('w-full mb-2')
+                    qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
+                    address_input = ui.input('收货详细地址*').classes('w-full mb-2')
+                    
+                    ui.separator().classes('my-4')
+                    ui.label('发货模式选择*').classes('text-xs font-bold text-gray-400 mb-1')
+                    mode_choice = ui.radio(['整车', '零单'], value='整车').props('inline')
+                    
+                    async def submit_shipment():
+                        if not customer_input.value or not product_input.value or not address_input.value:
+                            ui.notify('请完整填写必填项（带*）', type='warning')
+                            return
                         
-                        with ui.row().classes('items-center gap-6 mt-4'):
-                            ship_type = ui.radio(['整车', '零单'], value='整车').props('inline')
-                            async def do_dispatch():
-                                await backend_db.create_shipment(oid, ship_type.value)
-                                ui.notify(f'已生成【{ship_type.value}】发货单', type='positive')
-                                main_shipments_refreshable.refresh(None) 
-                                list_refreshable.refresh()
-                            ui.button('🚀 确认分流', on_click=do_dispatch, color='primary')
+                        await backend_db.create_shipment(
+                            customer_input.value, 
+                            product_input.value,
+                            int(qty_input.value), 
+                            address_input.value,
+                            mode_choice.value
+                        )
+                        ui.notify(f'发货单创建成功，已开启【{mode_choice.value}】派发流程', type='positive')
+                        
+                        # 清空并关闭
+                        customer_input.value = ''
+                        product_input.value = ''
+                        qty_input.value = 1
+                        address_input.value = ''
+                        dlg_new_shipment.close()
+                        list_refreshable.refresh()
+
+                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                        ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
+                        ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
+                
+                ui.button('新建发货单', icon='add', on_click=dlg_new_shipment.open).classes('bg-primary text-white font-bold')
+
+            # 废除原有的派发面板，该功能已被顶部新建功能取代
             
             # ── 调度总台账 ──
             with ui.card().classes('modern-card w-full p-6'):
@@ -334,7 +220,7 @@ async def shipments_content(selected_order_id: Optional[str] = None):
                                     dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
                                 <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
                                     dense color="orange" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
-                                <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'待填写\'" 
+                                <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
                                     dense color="orange" label="补录快递单" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
                                 <q-btn dense flat color="grey-7" icon="print" @click="$parent.$emit('print', props.row)" tooltip="打印发货单"/>
                             </q-td>
@@ -378,7 +264,6 @@ async def shipments_content(selected_order_id: Optional[str] = None):
                 await list_refreshable()
     
     await main_shipments_refreshable()
-    return main_shipments_refreshable
 
 # ════════════════════════════════════════════════
 #  SPA 页面组件：数据看板 & 费用核算 (维持原样)
@@ -452,10 +337,9 @@ async def main_page():
     inject_modern_css()
     
     # 状态：用于侧边栏切换与刷新
-    active_tab = 'orders'
-    shipments_ref = None 
+    active_tab = 'shipments'
 
-    def switch_to_tab(tab_name: str, order_id: Optional[str] = None):
+    def switch_to_tab(tab_name: str):
         nonlocal active_tab
         active_tab = tab_name
         panels.value = tab_name
@@ -464,12 +348,6 @@ async def main_page():
                 btn.classes('sidebar-item-active', remove='text-gray-400 hover:bg-gray-700 hover:text-white')
             else:
                 btn.classes('text-gray-400 hover:bg-gray-700 hover:text-white', remove='sidebar-item-active')
-        if tab_name == 'shipments' and shipments_ref:
-            shipments_ref.refresh(order_id)
-
-    # 声明全局函数供 Table 事件调用
-    global switch_to_shipments
-    switch_to_shipments = lambda oid: switch_to_tab('shipments', oid)
 
     # 1. 顶部栏 (放置 Toggle 按钮)
     with ui.header().classes('bg-white text-gray-800 border-b border-gray-200 px-4 flex items-center justify-between'):
@@ -490,7 +368,6 @@ async def main_page():
         with ui.column().classes('flex-grow p-3 gap-1 w-full'):
             sidebar_btns = {}
             MENU = [
-                ('orders',    '📝', '订单管理'),
                 ('shipments', '📦', '发货调度'),
                 ('dashboard', '📊', '数据看板'),
                 ('finance',   '💰', '费用核算'),
@@ -506,17 +383,15 @@ async def main_page():
             ui.button('收起菜单', icon='chevron_left', on_click=left_drawer.toggle).props('flat dense size=sm').classes('text-gray-500 w-full')
 
     # 3. 内容面板
-    with ui.tab_panels(value='orders').classes('w-full bg-transparent h-full') as panels:
-        with ui.tab_panel('orders').classes('p-0'):
-            await orders_content()
+    with ui.tab_panels(value='shipments').classes('w-full bg-transparent h-full') as panels:
         with ui.tab_panel('shipments').classes('p-0'):
-            shipments_ref = await shipments_content()
+            await shipments_content()
         with ui.tab_panel('dashboard').classes('p-0'):
             await dashboard_content()
         with ui.tab_panel('finance').classes('p-0'):
             await finance_content()
     
-    switch_to_tab('orders')
+    switch_to_tab('shipments')
 
 # 司机页 & 打印页 (由于是独立入口，保持不变)
 @ui.page('/driver_confirm')
