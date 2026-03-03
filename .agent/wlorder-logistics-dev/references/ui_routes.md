@@ -4,7 +4,7 @@
 
 - 框架：NiceGUI（内置 Vue3 + Quasar UI）
 - 入口：`app.py`，`ui.run(port=8501, host='0.0.0.0')`
-- 导航：顶部 Header 导航栏，含页面链接
+- 导航：**左侧固定侧边栏（Sidebar）**，内容区占满右侧剩余宽度
 
 ## 路由表
 
@@ -17,15 +17,40 @@
 | `/dashboard` | *待开发* | PC | 数据看板 |
 | `/finance` | *待开发* | PC | 费用核算台账 |
 
-## 全局组件
+## 全局侧边栏组件 (Sidebar)
 
-### Header 导航栏
 ```python
-def create_header(title: str):
-    # bg-primary, text-white, 包含页面链接
-    # 链接: 📝 订单管理(/) | 📦 发货单派发(/shipments)
-    # 待扩展: 📊 数据看板(/dashboard) | 💰 费用核算(/finance)
+def create_sidebar(active: str):
+    """
+    创建左侧固定侧边栏。
+    active: 当前激活的路由名 ('orders' | 'shipments' | 'dashboard' | 'finance')
+    """
+    # 侧边栏容器: bg-dark(深色) 宽240px 固定高全屏
+    with ui.left_drawer(fixed=True).classes('bg-gray-900 text-white w-60 min-h-screen flex flex-col'):
+        # Logo + 系统名
+        with ui.row().classes('items-center gap-3 p-6 border-b border-gray-700'):
+            ui.icon('local_shipping', size='lg', color='blue-400')
+            ui.label('极速物流').classes('text-lg font-bold text-white')
+
+        with ui.column().classes('flex-grow p-3 gap-1'):
+            MENU = [
+                ('orders',    '📝', '订单管理',  '/'),
+                ('shipments', '📦', '发货调度',  '/shipments'),
+                ('dashboard', '📊', '数据看板',  '/dashboard'),
+                ('finance',   '💰', '费用核算',  '/finance'),
+            ]
+            for key, icon, label, href in MENU:
+                is_active = (key == active)
+                with ui.link(target=href).classes('w-full no-underline'):
+                    with ui.row().classes(
+                        f'w-full items-center gap-3 px-4 py-3 rounded-lg cursor-pointer '
+                        f'{"bg-blue-600 text-white" if is_active else "text-gray-400 hover:bg-gray-700 hover:text-white"}'
+                    ):
+                        ui.label(icon).classes('text-lg')
+                        ui.label(label).classes('font-medium')
 ```
+
+> **注意**：在 NiceGUI 中，侧边栏使用 `ui.left_drawer` 组件实现；页面函数需调用 `create_sidebar(active='当前页key')` 来激活当前菜单项。
 
 ### 二维码生成
 ```python
@@ -47,19 +72,42 @@ def get_local_ip() -> str:
 
 **布局结构**：
 ```
-Header
-└── Column (max-w-6xl, 居中)
-    ├── Card: 录入新订单
-    │   └── Row: [客户名称] [货物名称] [数量] [收货地址] [提交按钮]
-    └── Card: 历史订单列表
-        └── Table (可刷新)
-            ├── 列: 订单号 | 客户名 | 货物名称 | 数量 | 状态(Chip) | 创建时间 | 操作
-            └── 操作: 待发货→点击跳转/shipments?order_id=X | 已派发→灰色禁用
+Sidebar (左侧, 240px)
+└── 右侧内容区 (flex-grow)
+    └── Column (max-w-6xl, 居中)
+        ├── 页面顶部标题行
+        │   ├── 左侧: 页面标题 "订单管理"
+        │   └── 右侧: [+ 新建订单] 主操作按钮（点击弹出Dialog）
+        ├── Card: 筛选器工具栏
+        │   └── Row: [状态下拉多选] [日期区间选择] [货物名称关键词] [搜索按钮] [重置]
+        └── Card: 历史订单列表
+            └── Table (可刷新, 联动过滤器)
+                ├── 列: 订单号 | 客户名 | 货物名称 | 数量 | 状态(Chip) | 创建时间 | 操作
+                └── 操作: 待发货→点击跳转/shipments?order_id=X | 已派发→灰色禁用
+
+Dialog: 新建订单（居中模态, min-w-[480px]）
+    ├── 标题行: "📝 新建客户订单" + 关闭按钮 (X)
+    ├── 内容区 (垂直排列字段):
+    │   ├── 客户名称* (全宽 Input)
+    │   ├── 货物品类* (全宽 Input)
+    │   ├── 数量(#件)* (Number, min=1)
+    │   └── 收货地址* (全宽 Input)
+    └── 操作区 (Row, 右对齐):
+        ├── 取消 (描边按钮)
+        └── 确认生单 (实心蓝色主按钮)
 ```
+
+**筛选器规范**：
+- **订单状态**：`q-select` 多选，选项：全部 / 待发货 / 已派发，默认空（显示全部）
+- **创建日期范围**：开始日期 + 结束日期两个 `q-input type=date`
+- **货物名称**：`q-input` 模糊搜索
+- **默认排序**：`待发货` 优先，`created_at DESC`
+- **前端过滤**：数据从后端全量拉取后，在前端用 Python filter 进行过滤，避免复杂 SQL 参数
 
 **关键交互**：
 - 订单号自动生成：`ORDER-YYYYMMDDHHmmss`
-- 提交后清空表单 + 刷新列表（`@ui.refreshable`）
+- **`+ 新建订单` 按钮**：放在页面标题行右上角，点击弹出模态 Dialog 而非在页内展开内嵌表单
+- 提交后：关闭 Dialog + 刷新列表（`@ui.refreshable`）
 - 状态 Chip 颜色：待发货=orange, 已派发=green
 
 ### `/shipments` 发货调度页

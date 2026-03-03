@@ -58,22 +58,6 @@ def inject_modern_css():
         .modern-card:hover {
             box-shadow: 0 4px 6px rgba(0,0,0,0.05), 0 2px 4px rgba(0,0,0,0.03);
         }
-        .header-nav {
-            background: #FFFFFF;
-            border-bottom: 1px solid var(--border-color);
-        }
-        .nav-link {
-            color: #4B5563;
-            text-decoration: none;
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            transition: all 0.2s;
-            font-weight: 500;
-        }
-        .nav-link:hover {
-            background-color: #F3F4F6;
-            color: var(--primary-blue);
-        }
         /* 表格斑马纹与操作吸顶 */
         .q-table tbody tr:nth-child(even) {
             background-color: #FAFAFA;
@@ -84,18 +68,32 @@ def inject_modern_css():
         </style>
     ''')
 
-def create_header(title: str):
-    """PC 端统一 Header"""
+def create_sidebar(active: str):
+    """创建左侧固定侧边栏 (Sidebar) 替代原 Header，符合专业级 SaaS 规范"""
     inject_modern_css()
-    with ui.header().classes('header-nav items-center justify-between px-8 py-3 w-full'):
-        with ui.row().classes('items-center gap-3'):
-            ui.icon('local_shipping', size='md', color='primary')
-            ui.label(title).classes('text-xl font-bold tracking-tight text-gray-800')
-        with ui.row().classes('gap-2'):
-            ui.link('📝 订单管理', '/').classes('nav-link')
-            ui.link('📦 发货调度', '/shipments').classes('nav-link')
-            ui.link('📊 数据看板', '/dashboard').classes('nav-link')
-            ui.link('💰 费用核算', '/finance').classes('nav-link')
+    # 侧边栏容器: bg-dark(深色) 宽240px 固定高全屏
+    with ui.left_drawer(fixed=True).classes('bg-gray-900 text-white w-60 min-h-screen flex flex-col'):
+        # Logo + 系统名
+        with ui.row().classes('items-center gap-3 p-6 border-b border-gray-700 w-full'):
+            ui.icon('local_shipping', size='lg', color='blue-400')
+            ui.label('极速物流').classes('text-lg font-bold text-white')
+
+        with ui.column().classes('flex-grow p-3 gap-1 w-full'):
+            MENU = [
+                ('orders',    '📝', '订单管理',  '/'),
+                ('shipments', '📦', '发货调度',  '/shipments'),
+                ('dashboard', '📊', '数据看板',  '/dashboard'),
+                ('finance',   '💰', '费用核算',  '/finance'),
+            ]
+            for key, icon, label, href in MENU:
+                is_active = (key == active)
+                with ui.link(target=href).classes('w-full no-underline block'):
+                    with ui.row().classes(
+                        f'w-full items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-colors '
+                        f'{"bg-blue-600 text-white" if is_active else "text-gray-400 hover:bg-gray-700 hover:text-white"}'
+                    ):
+                        ui.label(icon).classes('text-lg')
+                        ui.label(label).classes('font-medium')
 
 # ════════════════════════════════════════════════
 #  1. 订单管理页 (/)
@@ -104,17 +102,24 @@ def create_header(title: str):
 @ui.page('/')
 async def index_page():
     ui.page_title('订单管理 - 极速物流系统')
-    create_header('极速物流调度管理台')
+    create_sidebar(active='orders')
     
     with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 gap-6 mb-12'):
-        # ── 录入订单卡片 ──
-        with ui.card().classes('modern-card w-full p-6'):
-            ui.label('✨ 录入新客户订单').classes('text-lg font-bold mb-4')
-            with ui.row().classes('w-full gap-4 items-end'):
-                customer_input = ui.input('客户名称*').classes('flex-grow')
-                product_input = ui.input('货物品类*').classes('flex-grow')
-                qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-32')
-                address_input = ui.input('收货详细地址*').classes('flex-grow-2 w-1/3')
+        # ── 页面顶部行 ──
+        with ui.row().classes('w-full justify-between items-center'):
+            ui.label('订单管理').classes('text-2xl font-bold tracking-tight text-gray-800')
+            
+            # 弹窗内的新建订单表单
+            dlg_new_order = ui.dialog()
+            with dlg_new_order, ui.card().classes('min-w-[480px] p-6'):
+                with ui.row().classes('w-full justify-between items-center mb-4'):
+                    ui.label('📝 新建客户订单').classes('text-lg font-bold')
+                    ui.button(icon='close', on_click=dlg_new_order.close).props('flat round dense')
+                
+                customer_input = ui.input('客户名称*').classes('w-full mb-2')
+                product_input = ui.input('货物品类*').classes('w-full mb-2')
+                qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
+                address_input = ui.input('收货详细地址*').classes('w-full mb-6')
                 
                 async def submit_order():
                     if not customer_input.value or not product_input.value or not address_input.value:
@@ -126,28 +131,83 @@ async def index_page():
                         int(qty_input.value), address_input.value
                     )
                     ui.notify('订单创建成功', type='positive')
-                    # 清空表单
+                    # 清空并关闭
                     customer_input.value = ''
                     product_input.value = ''
                     qty_input.value = 1
                     address_input.value = ''
+                    dlg_new_order.close()
+                    order_list_refreshable.refresh()
+
+                with ui.row().classes('w-full justify-end gap-2'):
+                    ui.button('取消', on_click=dlg_new_order.close).props('outline text-gray-600 border-gray-300')
+                    ui.button('确认生单', on_click=submit_order, color='primary')
+            
+            ui.button('新建订单', icon='add', on_click=dlg_new_order.open).classes('bg-primary text-white font-bold')
+            
+        # ── 筛选工具栏 ──
+        with ui.card().classes('modern-card w-full p-4 border-l-4 border-l-blue-400'):
+            with ui.row().classes('w-full items-end gap-4'):
+                filter_status = ui.select(
+                    {'全部': '全部', '待发货': '待发货', '已派发': '已派发'}, 
+                    value='全部', 
+                    label='订单状态'
+                ).classes('w-40')
+                filter_start_date = ui.input('开始日期(YYYY-MM-DD)').props('type=date').classes('w-48')
+                filter_end_date = ui.input('结束日期(YYYY-MM-DD)').props('type=date').classes('w-48')
+                filter_keyword = ui.input('货物名称(关键词)').classes('flex-grow')
+                
+                def apply_filters():
                     order_list_refreshable.refresh()
                     
-                ui.button('保存并录入', on_click=submit_order, icon='save').classes('h-12 bg-primary text-white px-8')
-        
+                def reset_filters():
+                    filter_status.value = '全部'
+                    filter_start_date.value = ''
+                    filter_end_date.value = ''
+                    filter_keyword.value = ''
+                    order_list_refreshable.refresh()
+
+                ui.button('搜索', on_click=apply_filters, color='primary')
+                ui.button('重置', on_click=reset_filters, color='grey').props('outline')
+
         # ── 历史订单列表 ──
         with ui.card().classes('modern-card w-full p-6'):
             with ui.row().classes('w-full justify-between items-center mb-4'):
-                ui.label('📋 历史订单列表').classes('text-lg font-bold')
+                ui.label('📋 订单列表').classes('text-lg font-bold')
                 ui.button(icon='refresh', on_click=lambda: order_list_refreshable.refresh()).props('flat round color=primary tooltip="刷新"')
             
             @ui.refreshable
             async def order_list_refreshable():
                 orders = await backend_db.fetch_all_orders()
-                if not orders:
+                
+                # 前端过滤逻辑
+                filtered_orders = []
+                for order in orders:
+                    # 1. 状态过滤
+                    if filter_status.value != '全部' and order['status'] != filter_status.value:
+                        continue
+                    # 2. 关键词过滤
+                    if filter_keyword.value and filter_keyword.value.lower() not in order['product_name'].lower():
+                        continue
+                    # 3. 日期过滤
+                    order_date = order['created_at'][:10]
+                    if filter_start_date.value and order_date < filter_start_date.value:
+                        continue
+                    if filter_end_date.value and order_date > filter_end_date.value:
+                        continue
+                    
+                    filtered_orders.append(order)
+
+                # 排序: 默认先按时间降序
+                filtered_orders.sort(key=lambda x: x['created_at'], reverse=True)
+                # 这个操作基于 python 是稳定排序；将待发货放到前面
+                filtered_orders.sort(key=lambda x: x['status'] != '待发货')
+
+
+                if not filtered_orders:
                     with ui.column().classes('w-full items-center py-12'):
                         ui.icon('inbox', size='4xl', color='grey-4').classes('mb-4')
-                        ui.label('暂无订单数据，请在上方录入').classes('text-gray-400')
+                        ui.label('暂无符合条件的订单数据').classes('text-gray-400')
                     return
                 
                 cols = [
@@ -159,7 +219,7 @@ async def index_page():
                     {'name': 'created_at', 'label': '创建时间', 'field': 'created_at', 'align': 'left'},
                     {'name': 'actions', 'label': '调度操作', 'align': 'center'},
                 ]
-                with ui.table(columns=cols, rows=orders, row_key='order_id').classes('w-full') as table:
+                with ui.table(columns=cols, rows=filtered_orders, row_key='order_id').classes('w-full') as table:
                     table.add_slot('body-cell-status', '''
                         <q-td :props="props">
                             <q-chip :color="props.row.status === \'待发货\' ? \'orange\' : \'green\'" text-color="white" dense size="sm">
@@ -185,9 +245,12 @@ async def index_page():
 @ui.page('/shipments')
 async def shipments_page(order_id: str = ''):
     ui.page_title('发货调度 - 极速物流系统')
-    create_header('发货单调度与管理')
+    create_sidebar(active='shipments')
     
     with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-6'):
+        with ui.row().classes('w-full justify-between items-center'):
+            ui.label('发货单调度与管理').classes('text-2xl font-bold tracking-tight text-gray-800')
+
         # ── 派发卡片（带参数时） ──
         if order_id:
             order = await backend_db.get_order_by_id(order_id)
@@ -251,7 +314,7 @@ async def shipments_page(order_id: str = ''):
             dlg_qr = ui.dialog()
             with dlg_qr, ui.card().classes('p-6 items-center'):
                 ui.label('司机发车扫码').classes('font-bold text-lg mb-4 text-primary')
-                qr_img = ui.html()
+                qr_img = ui.image().classes('w-60 h-60 bg-white p-2 rounded shadow')
                 ui.button('关闭', on_click=dlg_qr.close).classes('mt-4 w-full').props('outline')
 
             # --- 表格 ---
@@ -282,7 +345,7 @@ async def shipments_page(order_id: str = ''):
                     table.add_slot('body-cell-status', '''
                         <q-td :props="props">
                             <q-chip 
-                                :color="props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'red\' : (props.row.status === \'已订车\' ? \'blue\' : \'orange\'))" 
+                                :color="props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\')" 
                                 text-color="white" dense size="sm">
                                 {{ props.row.status }}
                             </q-chip>
@@ -303,7 +366,7 @@ async def shipments_page(order_id: str = ''):
                             
                             <!-- 已订车 → 呼出二维码 -->
                             <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
-                                dense color="blue" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
+                                dense color="orange" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
                             
                             <!-- 待填写 → 补录 -->
                             <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'待填写\'" 
@@ -319,10 +382,18 @@ async def shipments_page(order_id: str = ''):
                         ui.notify('操作成功，已变更为已订车', type='info')
                         list_refreshable.refresh()
                     
-                    def handle_show_qr(e):
-                        sid, tk = e.args['shipment_id'], e.args['driver_token']
-                        url = f"{base_url_input.value.strip('/')}/driver_confirm?id={sid}&token={tk}"
-                        qr_img.content = f'<div class="p-2 bg-white rounded shadow"><img src="{generate_qr_base64(url)}" width="240" height="240" /></div>'
+                    async def handle_show_qr(e):
+                        sid = e.args.get('shipment_id', '')
+                        tk = e.args.get('driver_token', '')
+                        if not tk:
+                            ui.notify('该发货单缺少发车 Token，请重新创建', type='negative')
+                            return
+                        try:
+                            url = f"{base_url_input.value.strip('/')}/driver_confirm?id={sid}&token={tk}"
+                            b64 = generate_qr_base64(url)
+                            qr_img.set_source(b64)
+                        except Exception as ex:
+                            ui.notify(f'二维码生成失败：{ex}', type='negative')
                         dlg_qr.open()
                         
                     def handle_fill_lingdan(e):
@@ -331,8 +402,11 @@ async def shipments_page(order_id: str = ''):
                         dlg_lingdan.open()
                         
                     def handle_print(e):
+                        import urllib.parse
+                        sid = e.args.get('shipment_id', '')
+                        base = urllib.parse.quote(base_url_input.value.strip('/'), safe='')
                         # 打开新标签页打印
-                        ui.open(f"/print?id={e.args['shipment_id']}", new_tab=True)
+                        ui.open(f"/print?id={sid}&base={base}", new_tab=True)
                     
                     table.on('mark_booked', handle_mark_booked)
                     table.on('show_qr', handle_show_qr)
@@ -348,7 +422,7 @@ async def shipments_page(order_id: str = ''):
 
 @ui.page('/driver_confirm')
 async def driver_confirm_page(id: str = '', token: str = ''):
-    """手机端即扫即用页面，无 Header。"""
+    """手机端即扫即用页面，无 Header/Sidebar，移动端适配。"""
     ui.page_title('司机发车确认')
     # 注入基础移动端优化 css
     ui.add_head_html('<style>body { background-color: #F8FAFC; }</style>')
@@ -407,7 +481,7 @@ async def driver_confirm_page(id: str = '', token: str = ''):
 # ════════════════════════════════════════════════
 
 @ui.page('/print')
-async def print_page(id: str = ''):
+async def print_page(id: str = '', base: str = ''):
     ship = await backend_db.get_shipment_by_id(id)
     if not ship:
         ui.label("发货单不存在")
@@ -443,10 +517,26 @@ async def print_page(id: str = ''):
                 <tr><th>货物名称</th><td>{ship['product_name']}</td><th>数量</th><td>{ship['quantity']} 件</td></tr>
             '''
             if ship['ship_type'] == '整车':
+                if not base:
+                    base = f"http://{get_local_ip()}:8501"
+                qr_url = f"{base}/driver_confirm?id={ship['shipment_id']}&token={ship.get('driver_token', '')}"
+                qr_b64 = generate_qr_base64(qr_url)
+                
                 html_table += f'''
                     <tr><th colspan="4" style="text-align:center;background:#eee;">承运司机信息</th></tr>
                     <tr><th>司机姓名</th><td>{ship.get('driver_name','')}</td><th>联系电话</th><td>{ship.get('driver_phone','')}</td></tr>
                     <tr><th>车牌号码</th><td>{ship.get('truck_plate','')}</td><th>车型</th><td>{ship.get('truck_type','')}</td></tr>
+                    <tr><th colspan="4" style="text-align:center;background:#eee;">发车/交付确认</th></tr>
+                    <tr>
+                        <td colspan="2" style="text-align:center; padding: 20px;">
+                            <img src="{qr_b64}" width="140" height="140" style="margin: 0 auto; display:block;" />
+                            <p style="margin-top: 8px; font-size: 12px; font-weight: bold;">[司机扫码发车]</p>
+                        </td>
+                        <td colspan="2" style="text-align:center; padding: 20px;">
+                            <div style="width: 140px; height: 140px; border: 1px dashed #ccc; margin: 0 auto;"></div>
+                            <p style="margin-top: 8px; font-size: 12px; font-weight: bold;">[收货方签收留印处]</p>
+                        </td>
+                    </tr>
                 '''
             else:
                 html_table += f'''
@@ -467,11 +557,14 @@ async def print_page(id: str = ''):
 @ui.page('/dashboard')
 async def dashboard_page():
     ui.page_title('数据看板 - 极速物流系统')
-    create_header('数据资产与作业总看板')
+    create_sidebar(active='dashboard')
     
     stats = await backend_db.get_dashboard_stats()
     
     with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12'):
+        with ui.row().classes('w-full justify-between items-center mb-6'):
+            ui.label('数据资产与作业看板').classes('text-2xl font-bold tracking-tight text-gray-800')
+
         # ── 核心 KPI 卡片区 ──
         with ui.row().classes('w-full gap-6 mb-6'):
             def kpi_card(title, value, color_class, icon):
@@ -516,9 +609,12 @@ async def dashboard_page():
 @ui.page('/finance')
 async def finance_page():
     ui.page_title('费用核算 - 极速物流系统')
-    create_header('财务核算与利差对账单')
+    create_sidebar(active='finance')
     
     with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12'):
+        with ui.row().classes('w-full justify-between items-center mb-6'):
+            ui.label('财务核算与利差对账').classes('text-2xl font-bold tracking-tight text-gray-800')
+
         # ── 财务总计 ──
         summary = await backend_db.get_finance_summary()
         with ui.card().classes('modern-card w-full p-6 mb-6 bg-gray-50'):
