@@ -9,6 +9,8 @@ import qrcode
 from nicegui import app, ui
 
 import backend_db
+import waybill_generator
+import freight_calc
 from init_db import init_db
 
 # 启动时自动初始化数据库
@@ -92,10 +94,58 @@ async def shipments_content():
                 
                 # ── 融合后的新建发货单入口 ──
                 dlg_new_shipment = ui.dialog()
-                with dlg_new_shipment, ui.card().classes('min-w-[480px] p-6'):
+                with dlg_new_shipment, ui.card().classes('min-w-[540px] p-6'):
                     with ui.row().classes('w-full justify-between items-center mb-4'):
                         ui.label('📝 新建发货单').classes('text-lg font-bold')
                         ui.button(icon='close', on_click=dlg_new_shipment.close).props('flat round dense')
+                    
+                    # Excel 导入区
+                    imported_products: list[dict] = []
+                    with ui.row().classes('w-full items-center mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100'):
+                        ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
+                        ui.label('从客户订单Excel导入').classes('text-sm font-bold text-blue-800 flex-1')
+                        
+                        async def on_excel_upload(e):
+                            """解析上传的订单 Excel，自动填充表单字段"""
+                            try:
+                                import tempfile, os, asyncio
+                                # 兼容不同 NiceGUI 版本的上传事件属性名
+                                filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
+                                suffix = Path(filename).suffix or '.xlsx'
+                                content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
+                                if content_io is None:
+                                    ui.notify('无法读取上传文件', type='negative')
+                                    return
+                                # 兼容同步 BytesIO 和异步 UploadFile 两种情层
+                                raw = content_io.read()
+                                if asyncio.iscoroutine(raw):
+                                    raw = await raw
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                                    tmp.write(raw)
+                                    tmp_path = tmp.name
+                                
+                                data = waybill_generator.parse_order_excel(tmp_path)
+                                os.unlink(tmp_path)
+                                
+                                # 填充收货人信息
+                                customer_input.value = data['receiver_name']
+                                address_input.value = data['receiver_address']
+                                
+                                # 填充商品信息（取前3个商品名称合并显示）
+                                prods = data.get('products', [])
+                                if prods:
+                                    product_input.value = '、'.join([p['name'] for p in prods[:3]])
+                                    qty_input.value = sum(p['qty'] for p in prods)
+                                
+                                # 保存到外层变量供生成托运单使用
+                                imported_products.clear()
+                                imported_products.extend(prods)
+                                
+                                ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品，请检查信息', type='positive')
+                            except Exception as ex:
+                                ui.notify(f'导入失败：{ex}', type='negative')
+                        
+                        ui.upload(on_upload=on_excel_upload, auto_upload=True, label='选择 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
                     
                     customer_input = ui.input('客户名称*').classes('w-full mb-2')
                     product_input = ui.input('货物品类*').classes('w-full mb-2')
@@ -249,6 +299,102 @@ async def shipments_content():
                         ui.button('暂不撤销', on_click=dlg_rollback.close).props('outline text-gray-600')
                         ui.button('确认撤销回【未订车】', on_click=confirm_rollback, color='orange')
 
+                # ── 弹窗：生成托运单 ──
+                wb_sid_label = ui.label().classes('hidden')     # 当前发货单ID
+                wb_receiver  = ui.label().classes('hidden')     # 收货人
+                wb_address   = ui.label().classes('hidden')     # 收货地址
+                wb_weight_label  = ui.label('─')                # 总重量预算结果展示
+                wb_freight_label = ui.label('─')                # 运费预算结果展示
+                wb_ship_type  = None
+                wb_freight    = None
+                wb_delivery_fee = None
+                wb_pickup     = None
+                wb_payment    = None
+
+                dlg_waybill = ui.dialog()
+                with dlg_waybill, ui.card().classes('min-w-[520px] p-6'):
+                    with ui.row().classes('w-full justify-between items-center mb-4'):
+                        ui.label('📔 生成托运单').classes('text-lg font-bold text-gray-800')
+                        ui.button(icon='close', on_click=dlg_waybill.close).props('flat round dense')
+                    
+                    # 运输类型
+                    ui.label('运输类型').classes('text-xs font-bold text-gray-400 mb-1')
+                    wb_ship_type = ui.select(['零单', '整车', '专车'], value='零单').classes('w-full mb-2')
+                    
+                    with ui.row().classes('w-full gap-2 mb-2'):
+                        wb_freight    = ui.number('手动输入运费(元)', value=0, min=0).classes('flex-1')
+                        wb_delivery_fee = ui.number('送货费(元)', value=0, min=0).classes('flex-1')
+                    
+                    with ui.row().classes('w-full gap-2 mb-4'):
+                        wb_pickup  = ui.select(['送货上门', '自提'], value='送货上门', label='取货方式').classes('flex-1')
+                        wb_payment = ui.select(['现付', '提付'], value='现付', label='付款方式').classes('flex-1')
+                    
+                    # 预算结果展示
+                    with ui.card().classes('w-full bg-gray-50 p-3 mb-4'):
+                        with ui.row().classes('w-full justify-between'):
+                            ui.label('总重量：').classes('text-sm text-gray-600')
+                            wb_weight_label = ui.label('—').classes('text-sm font-bold text-blue-700')
+                        with ui.row().classes('w-full justify-between'):
+                            ui.label('运费计算：').classes('text-sm text-gray-600')
+                            wb_freight_label = ui.label('—').classes('text-sm font-bold text-green-700')
+                    
+                    async def preview_waybill():
+                        """(按预算)根据当前单据信息计算重量和运费"""
+                        try:
+                            spec_rows = await backend_db.get_all_spec_weights()
+                            sw = {r['spec']: r['weight_kg'] for r in spec_rows}
+                            ship = await backend_db.get_shipment_by_id(curr_sid.text)
+                            if not ship:
+                                return
+                            products = [{'name': ship.get('product_name',''), 'spec': '', 'qty': ship.get('quantity', 0)}]
+                            total_qty, total_weight_t = waybill_generator.calc_total_weight(products, sw)
+                            wb_weight_label.set_text(f'{total_weight_t} 吨')
+                            
+                            if wb_ship_type.value in ('零单', '拼车'):
+                                calc = freight_calc.calc_freight(total_weight_t, wb_ship_type.value, 0, wb_delivery_fee.value)
+                                wb_freight_label.set_text(f'{calc} 元 (需先输入内表单价)' if calc == 0 else f'{calc} 元')
+                            else:
+                                wb_freight_label.set_text(f'请手动输入运费')
+                        except Exception as ex:
+                            ui.notify(f'预算失败: {ex}', type='warning')
+                    
+                    async def download_waybill():
+                        """(下载)以托运单模板生成填充后的 Excel"""
+                        try:
+                            spec_rows = await backend_db.get_all_spec_weights()
+                            sw = {r['spec']: r['weight_kg'] for r in spec_rows}
+                            ship = await backend_db.get_shipment_by_id(curr_sid.text)
+                            if not ship:
+                                ui.notify('未找到发货单信息', type='negative')
+                                return
+                            
+                            products = [{'name': ship.get('product_name',''), 'spec': '', 'qty': ship.get('quantity', 0)}]
+                            order_data = {
+                                'order_no': ship.get('shipment_id', ''),
+                                'receiver_name':    ship.get('customer_name', ''),
+                                'receiver_phone':   '',
+                                'receiver_address': ship.get('delivery_address', ''),
+                                'products': products,
+                            }
+                            freight_val = float(wb_freight.value or 0)
+                            excel_bytes = waybill_generator.generate_waybill_excel(
+                                order_data, freight=freight_val,
+                                pickup_method=wb_pickup.value,
+                                payment_method=wb_payment.value,
+                                spec_weights=sw,
+                            )
+                            filename = f"托运单_{ship.get('shipment_id','')}_{datetime.date.today()}.xlsx"
+                            ui.download(excel_bytes, filename)
+                            ui.notify('托运单已生成，即将下载', type='positive')
+                        except Exception as ex:
+                            ui.notify(f'托运单生成失败：{ex}', type='negative')
+                    
+                    with ui.row().classes('w-full justify-between gap-2 mt-2'):
+                        ui.button('预算重量与运费', on_click=preview_waybill, color='blue').props('outline dense')
+                        ui.space()
+                        ui.button('取消', on_click=dlg_waybill.close).props('flat')
+                        ui.button('生成并下载 Excel', on_click=download_waybill, color='green').props('dense')
+
                 # ── 筛选栏组件 ──
                 with ui.row().classes('w-full items-end gap-4 p-4 mb-4 bg-gray-50 rounded-lg border border-gray-100 shadow-sm'):
                     filter_status = ui.select(['全部', '未订车', '已订车', '已发货', '已作废'], value='全部', label='状态').classes('w-32')
@@ -400,10 +546,20 @@ async def shipments_content():
                             dlg_lingdan.open()
                             
                         def handle_print(e):
-                            import urllib.parse
-                            sid = e.args.get('shipment_id', '')
-                            base = urllib.parse.quote(base_url_input.value.strip('/'), safe='')
-                            ui.open(f"/print?id={sid}&base={base}", new_tab=True)
+                            """打印按钮 → 弹出生成托运单弹窗"""
+                            row = e.args
+                            curr_sid.set_text(row.get('shipment_id', ''))
+                            # 预填收货人信息
+                            wb_receiver.set_text(row.get('customer_name', ''))
+                            wb_address.set_text(row.get('delivery_address', ''))
+                            wb_freight.value = 0
+                            wb_delivery_fee.value = 0
+                            wb_ship_type.value = '零单'
+                            wb_pickup.value = '送货上门'
+                            wb_payment.value = '现付'
+                            wb_weight_label.set_text('─')
+                            wb_freight_label.set_text('─')
+                            dlg_waybill.open()
                         
                         table.on('edit_shipment', handle_edit_shipment)
                         table.on('cancel_shipment', handle_cancel_shipment)
@@ -523,6 +679,7 @@ async def main_page():
                 ('shipments', '📦', '发货调度'),
                 ('dashboard', '📊', '数据看板'),
                 ('finance',   '💰', '费用核算'),
+                ('settings',  '⚙️', '系统设置'),
             ]
             for key, icon, label in MENU:
                 with ui.row().classes('w-full items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-colors text-gray-400 hover:bg-gray-700 hover:text-white') as btn:
@@ -542,8 +699,65 @@ async def main_page():
             await dashboard_content()
         with ui.tab_panel('finance').classes('p-0'):
             await finance_content()
+        with ui.tab_panel('settings').classes('p-0'):
+            await settings_content()
     
     switch_to_tab('shipments')
+
+
+# ════════════════════════════════════════════════
+#  SPA 页面组件：系统设置（规格单重管理）
+# ════════════════════════════════════════════════
+
+async def settings_content():
+    with ui.column().classes('w-full max-w-4xl mx-auto mt-6 px-4 mb-12 gap-6'):
+        ui.label('⚙️ 系统设置 — 规格单重管理').classes('text-2xl font-bold tracking-tight text-gray-800')
+        
+        with ui.card().classes('modern-card w-full p-6'):
+            ui.label('📦 规格单重配置').classes('text-lg font-bold mb-4')
+            ui.label('用于生成托运单时计算总重量。单位：kg/件。').classes('text-sm text-gray-500 mb-4')
+            
+            @ui.refreshable
+            async def spec_table_refreshable():
+                rows = await backend_db.get_all_spec_weights()
+                cols = [
+                    {'name': 'spec',      'label': '规格名称', 'field': 'spec',      'align': 'left'},
+                    {'name': 'weight_kg', 'label': '单重(kg)', 'field': 'weight_kg', 'align': 'center'},
+                    {'name': 'actions',   'label': '操作',                            'align': 'center'},
+                ]
+                with ui.table(columns=cols, rows=rows, row_key='spec').classes('w-full') as spec_tbl:
+                    spec_tbl.add_slot('body-cell-actions', '''
+                        <q-td :props="props">
+                            <q-btn dense flat color="red-5" icon="delete" 
+                                @click="$parent.$emit('del_spec', props.row)"/>
+                        </q-td>
+                    ''')
+                    async def on_del(e):
+                        await backend_db.delete_spec_weight(e.args['spec'])
+                        ui.notify(f'已删除规格：{e.args["spec"]}', type='warning')
+                        spec_table_refreshable.refresh()
+                    spec_tbl.on('del_spec', on_del)
+            
+            await spec_table_refreshable()
+            
+            ui.separator().classes('my-4')
+            ui.label('新增规格').classes('text-sm font-bold text-gray-600 mb-2')
+            
+            with ui.row().classes('w-full items-end gap-2'):
+                new_spec = ui.input('规格名称（如 750ml*12）').classes('flex-1')
+                new_weight = ui.number('单重（kg）', value=0.0, min=0).classes('w-36')
+                
+                async def add_spec():
+                    if not new_spec.value:
+                        ui.notify('请输入规格名称', type='warning')
+                        return
+                    await backend_db.save_spec_weight(new_spec.value, float(new_weight.value))
+                    ui.notify(f'已保存规格 {new_spec.value} = {new_weight.value}kg', type='positive')
+                    new_spec.value = ''
+                    new_weight.value = 0.0
+                    spec_table_refreshable.refresh()
+                
+                ui.button('➕ 新增', on_click=add_spec, color='primary').props('dense')
 
 # 司机页 & 打印页 (由于是独立入口，保持不变)
 @ui.page('/driver_confirm')

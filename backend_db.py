@@ -402,10 +402,47 @@ async def get_finance_summary() -> dict:
         async with conn.execute(
             """SELECT
                  COUNT(*) as total,
-                 COALESCE(SUM(logistics_fee), 0) as total_fee,
+                  COALESCE(SUM(logistics_fee), 0) as total_fee,
                  COALESCE(SUM(actual_cost), 0) as total_cost,
                  COALESCE(SUM(profit), 0) as total_profit
                FROM shipments WHERE status='已发货'"""
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else {}
+
+
+# ════════════════════════════════════════════════
+#  规格单重配置
+# ════════════════════════════════════════════════
+
+async def get_all_spec_weights() -> list[dict]:
+    """获取所有规格单重配置。"""
+    async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT spec, weight_kg FROM spec_weights ORDER BY spec"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def save_spec_weight(spec: str, weight_kg: float) -> None:
+    """新增或更新一条规格单重（UPSERT）。"""
+    async with get_conn() as conn:
+        await conn.execute(
+            """INSERT INTO spec_weights (spec, weight_kg, updated_at)
+               VALUES (?, ?, datetime('now','localtime'))
+               ON CONFLICT(spec) DO UPDATE SET
+                   weight_kg  = excluded.weight_kg,
+                   updated_at = excluded.updated_at""",
+            (spec.strip(), float(weight_kg)),
+        )
+        await conn.commit()
+
+
+async def delete_spec_weight(spec: str) -> None:
+    """删除一条规格单重配置。"""
+    async with get_conn() as conn:
+        await conn.execute(
+            "DELETE FROM spec_weights WHERE spec = ?", (spec.strip(),)
+        )
+        await conn.commit()
+

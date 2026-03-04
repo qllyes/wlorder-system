@@ -66,6 +66,28 @@ def init_db() -> None:
     )
     """)
 
+    # ── 规格单重配置表 ──
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS spec_weights (
+        spec        TEXT PRIMARY KEY,
+        weight_kg   REAL NOT NULL,
+        updated_at  DATETIME DEFAULT (datetime('now','localtime'))
+    )
+    """)
+    # 预插入默认规格（忽略已存在的记录）
+    default_specs = [
+        ("305ml*12", 6.54),
+        ("650ml*6",  4.72),
+        ("650ml*12", 9.25),
+        ("1L*6",     7.14),
+        ("750ml*6",  10.0),
+        ("20L/桶",   21.0),
+    ]
+    cur.executemany(
+        "INSERT OR IGNORE INTO spec_weights (spec, weight_kg) VALUES (?, ?)",
+        default_specs,
+    )
+
     conn.commit()
     conn.close()
     print(f"[init_db] 数据库 '{DB_PATH}' 结构已就绪。")
