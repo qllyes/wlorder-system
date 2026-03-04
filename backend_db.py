@@ -65,11 +65,35 @@ async def create_order(
 #  发货单模块
 # ════════════════════════════════════════════════
 
-async def fetch_all_shipments() -> list[dict]:
+async def fetch_all_shipments(
+    status: str = '全部',
+    customer_name: str = '',
+    start_date: str = '',
+    end_date: str = ''
+) -> list[dict]:
+    query = "SELECT * FROM shipments WHERE 1=1"
+    params = []
+    
+    if status and status != '全部':
+        query += " AND status = ?"
+        params.append(status)
+        
+    if customer_name:
+        query += " AND customer_name LIKE ?"
+        params.append(f"%{customer_name.strip()}%")
+        
+    if start_date:
+        query += " AND date(created_at) >= ?"
+        params.append(start_date)
+        
+    if end_date:
+        query += " AND date(created_at) <= ?"
+        params.append(end_date)
+        
+    query += " ORDER BY created_at DESC"
+    
     async with get_conn() as conn:
-        async with conn.execute(
-            "SELECT * FROM shipments ORDER BY created_at DESC"
-        ) as cur:
+        async with conn.execute(query, tuple(params)) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
 
@@ -122,6 +146,83 @@ async def create_shipment(
     return shipment_id
 
 
+# ── 发货单基础操作 (修改与作废) ──
+
+async def update_shipment_info(
+    shipment_id: str,
+    customer_name: str,
+    product_name: str,
+    quantity: int,
+    delivery_address: str,
+    ship_type: str
+) -> None:
+    """编辑未发货的发货单基础信息，包含业务模式的切换"""
+    async with get_conn() as conn:
+        # 首先查询目前的状态
+        async with conn.execute(
+            "SELECT ship_type, driver_token FROM shipments WHERE shipment_id = ?",
+            (shipment_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row: return
+            
+            old_ship_type = row["ship_type"]
+            token = row["driver_token"]
+
+        # 模式切换补齐：如果是新变成'整车'并且以前没有Token，就生成一个；否则剥离Token
+        if ship_type == "整车" and old_ship_type != "整车":
+            token = uuid.uuid4().hex
+        elif ship_type == "零单":
+            token = None
+            
+        # 若改变了运输模式，应把状态重置为"未订车" (例如本来是整车已订车，改成了零单)
+        set_status_snippet = "status='未订车', " if old_ship_type != ship_type else ""
+
+        await conn.execute(
+            f"""UPDATE shipments
+               SET customer_name=?, product_name=?, quantity=?, delivery_address=?, 
+                   ship_type=?, driver_token=?, {set_status_snippet}
+                   driver_name=NULL, driver_id_card=NULL, driver_phone=NULL, truck_plate=NULL, truck_type=NULL,
+                   third_party_company=NULL, third_party_tracking=NULL, batch_id=NULL
+               WHERE shipment_id=? AND status IN ('未订车', '已订车')""",
+            (customer_name, product_name, quantity, delivery_address, ship_type, token, shipment_id),
+        )
+        await conn.commit()
+        await conn.commit()
+
+async def cancel_shipment(shipment_id: str) -> None:
+    """确认作废未发货的发货单"""
+    async with get_conn() as conn:
+        await conn.execute(
+            """UPDATE shipments
+               SET status='已作废'
+               WHERE shipment_id=? AND status IN ('未订车', '已订车')""",
+            (shipment_id,),
+        )
+        await conn.commit()
+
+async def rollback_to_unbooked(shipment_id: str) -> None:
+    """逆向业务：异常回退，撤销发货并清空所有的物流/司机绑定信息，重发货车码"""
+    async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT ship_type FROM shipments WHERE shipment_id = ?",
+            (shipment_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row: return
+            ship_type = row["ship_type"]
+
+        token = uuid.uuid4().hex if ship_type == '整车' else None
+        
+        await conn.execute(
+            """UPDATE shipments
+               SET status='未订车', driver_token=?,
+                   driver_name=NULL, driver_id_card=NULL, driver_phone=NULL, truck_plate=NULL, truck_type=NULL,
+                   third_party_company=NULL, third_party_tracking=NULL, batch_id=NULL
+               WHERE shipment_id=? AND status='已发货'""",
+            (token, shipment_id),
+        )
+        await conn.commit()
 
 # ── 整车状态流转 ──
 

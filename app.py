@@ -152,6 +152,40 @@ async def shipments_content():
                 
                 curr_sid = ui.label().classes('hidden')
                 
+                # ── 弹窗：编辑发货单 ──
+                dlg_edit = ui.dialog()
+                with dlg_edit, ui.card().classes('min-w-[480px] p-6'):
+                    with ui.row().classes('w-full justify-between items-center mb-4'):
+                        ui.label('✏️ 修改发货单').classes('text-lg font-bold text-blue-800')
+                        ui.button(icon='close', on_click=dlg_edit.close).props('flat round dense')
+                    
+                    edit_customer = ui.input('客户名称*').classes('w-full mb-2')
+                    edit_product = ui.input('货物品类*').classes('w-full mb-2')
+                    edit_qty = ui.number('数量(件)*', min=1, format='%.0f').classes('w-full mb-2')
+                    edit_address = ui.input('收货详细地址*').classes('w-full mb-2')
+                    
+                    ui.separator().classes('my-4')
+                    ui.label('修改发货模式').classes('text-xs font-bold text-gray-400 mb-1')
+                    edit_mode = ui.radio(['整车', '零单'], value='整车').props('inline')
+                    ui.label('提示：若更改发货模式，系统将会自动清空绑定的司机并退回至【未订车】状态').classes('text-[10px] text-orange-500 mb-4')
+                    
+                    async def save_edit():
+                        if not edit_customer.value or not edit_product.value or not edit_address.value:
+                            ui.notify('请完整填写必填项', type='warning')
+                            return
+                        await backend_db.update_shipment_info(
+                            curr_sid.text, edit_customer.value, edit_product.value, 
+                            int(edit_qty.value), edit_address.value, edit_mode.value
+                        )
+                        ui.notify('发货单已修改', type='positive')
+                        dlg_edit.close()
+                        list_refreshable.refresh()
+                        
+                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                        ui.button('取消', on_click=dlg_edit.close).props('outline text-gray-600 border-gray-300')
+                        ui.button('保存修改', on_click=save_edit, color='primary')
+                
+                # ── 弹窗：补录零单快递信息 ──
                 dlg_lingdan = ui.dialog()
                 with dlg_lingdan, ui.card().classes('min-w-[400px] p-6'):
                     ui.label('补录第三方物流信息').classes('font-bold text-lg mb-4')
@@ -169,17 +203,99 @@ async def shipments_content():
                         ui.button('取消', on_click=dlg_lingdan.close).props('flat')
                         ui.button('保存并发货', on_click=save_lingdan, color='primary')
                         
+                # ── 弹窗：司机二维码 ──
                 dlg_qr = ui.dialog()
                 with dlg_qr, ui.card().classes('p-6 items-center'):
                     ui.label('司机发车扫码').classes('font-bold text-lg mb-4 text-primary')
                     qr_img = ui.image().classes('w-60 h-60 bg-white p-2 rounded shadow')
                     ui.button('关闭', on_click=dlg_qr.close).classes('mt-4 w-full').props('outline')
 
+                # ── 弹窗：作废确认 ──
+                dlg_cancel = ui.dialog()
+                with dlg_cancel, ui.card().classes('p-6 items-center'):
+                    ui.label('⚠️ 确定要作废这笔发货单吗？').classes('text-lg font-bold text-red-600 mb-2')
+                    ui.label('作废后将无法修改和恢复此单数据。').classes('text-sm text-gray-500 mb-6')
+                    
+                    async def confirm_cancel():
+                        await backend_db.cancel_shipment(curr_sid.text)
+                        ui.notify('此单据已作废，数据已归档', type='warning')
+                        dlg_cancel.close()
+                        list_refreshable.refresh()
+                        
+                    with ui.row().classes('w-full justify-center gap-4'):
+                        ui.button('暂不作废', on_click=dlg_cancel.close).props('outline text-gray-600')
+                        ui.button('确认作废', on_click=confirm_cancel, color='red')
+
+                # ── 弹窗：撤销发货(回驳)确认 ──
+                dlg_rollback = ui.dialog()
+                with dlg_rollback, ui.card().classes('p-6 items-center'):
+                    ui.label('🔄 确定要撤销这笔发货单吗？').classes('text-lg font-bold text-orange-600 mb-2')
+                    ui.label('此操作将会清空所有已绑定的司机、车辆及第三方物流信息，并将其打回至【未订车】池。').classes('text-sm text-gray-500 mb-6 text-center')
+                    
+                    async def confirm_rollback():
+                        await backend_db.rollback_to_unbooked(curr_sid.text)
+                        ui.notify('单据已撤销发货并打回未订车状态，所有物流关联已清空', type='info')
+                        dlg_rollback.close()
+                        list_refreshable.refresh()
+                        
+                    with ui.row().classes('w-full justify-center gap-4'):
+                        ui.button('暂不撤销', on_click=dlg_rollback.close).props('outline text-gray-600')
+                        ui.button('确认撤销回【未订车】', on_click=confirm_rollback, color='orange')
+
+                # ── 筛选栏组件 ──
+                with ui.row().classes('w-full items-end gap-4 p-4 mb-4 bg-gray-50 rounded-lg border border-gray-100 shadow-sm'):
+                    filter_status = ui.select(['全部', '未订车', '已订车', '已发货', '已作废'], value='全部', label='状态').classes('w-32')
+                    filter_customer = ui.input('客户名称').classes('w-48')
+                    filter_start = ui.input('开始时间(格式YYYY-MM-DD)').classes('w-48')
+                    filter_end = ui.input('结束时间(格式YYYY-MM-DD)').classes('w-48')
+                    
+                    def do_search():
+                        list_refreshable.refresh()
+                        
+                    def do_reset():
+                        filter_status.value = '全部'
+                        filter_customer.value = ''
+                        filter_start.value = ''
+                        filter_end.value = ''
+                        list_refreshable.refresh()
+                        
+                    async def export_csv():
+                        import csv, io
+                        rows = await backend_db.fetch_all_shipments(
+                            filter_status.value, filter_customer.value,
+                            filter_start.value, filter_end.value
+                        )
+                        output = io.StringIO()
+                        writer = csv.DictWriter(output, fieldnames=["shipment_id", "ship_type", "status", "customer_name", "product_name", "quantity", "delivery_address", "created_at"])
+                        
+                        # 写入中文表头映射方便理解
+                        writer.writerow({
+                            "shipment_id": "发货号", "ship_type": "模式", "status": "状态",
+                            "customer_name": "客户名称", "product_name": "货物品类", "quantity": "数量",
+                            "delivery_address": "收货地址", "created_at": "创建时间"
+                        })
+                        for row in rows:
+                            # 过滤仅导出我们关心的字段，屏蔽源数据ID或token等脏数据
+                            clean_row = {k: row.get(k, '') for k in writer.fieldnames}
+                            writer.writerow(clean_row)
+                            
+                        csv_data = output.getvalue().encode('utf-8-sig') # 避免 Excel 打开乱码
+                        ui.download(csv_data, f"骄阳物流总台账导出_{datetime.date.today().isoformat()}.csv")
+
+                    ui.button('查询', on_click=do_search, color='primary', icon='search').props('dense')
+                    ui.button('重置', on_click=do_reset, color='grey', icon='refresh').props('dense outline')
+                    
+                    ui.space()
+                    ui.button('导出 Excel (CSV)', on_click=export_csv, color='green', icon='file_download').props('dense outline')
+
                 table = None
                 
                 @ui.refreshable
                 async def list_refreshable():
-                    shipments = await backend_db.fetch_all_shipments()
+                    shipments = await backend_db.fetch_all_shipments(
+                        filter_status.value, filter_customer.value,
+                        filter_start.value, filter_end.value
+                    )
                     cols = [
                         {'name': 'shipment_id', 'label': '发货号', 'field': 'shipment_id', 'align': 'left'},
                         {'name': 'order_id', 'label': '源订单号', 'field': 'order_id', 'align': 'left'},
@@ -201,7 +317,7 @@ async def shipments_content():
                         table.add_slot('body-cell-status', '''
                             <q-td :props="props">
                                 <q-chip 
-                                    :color="props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\')" 
+                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\'))" 
                                     text-color="white" dense size="sm">
                                     {{ props.row.status }}
                                 </q-chip>
@@ -216,15 +332,41 @@ async def shipments_content():
                         ''')
                         table.add_slot('body-cell-actions', '''
                             <q-td :props="props">
-                                <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'未订车\'" 
-                                    dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
-                                <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
-                                    dense color="orange" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
-                                <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
-                                    dense color="orange" label="补录快递单" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
-                                <q-btn dense flat color="grey-7" icon="print" @click="$parent.$emit('print', props.row)" tooltip="打印发货单"/>
+                                <template v-if="props.row.status !== \'已作废\'">
+                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                        dense flat color="blue-7" icon="edit" @click="$parent.$emit('edit_shipment', props.row)" tooltip="修改" class="mr-1"/>
+                                    <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'未订车\'" 
+                                        dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
+                                    <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
+                                        dense color="orange" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
+                                    <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
+                                        dense color="orange" label="补录快递单" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
+                                    <q-btn dense flat color="grey-7" icon="print" @click="$parent.$emit('print', props.row)" tooltip="打印发货单"/>
+                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                        dense flat color="red-5" icon="delete" @click="$parent.$emit('cancel_shipment', props.row)" tooltip="作废" class="ml-2"/>
+                                    <q-btn v-if="props.row.status === \'已发货\'" 
+                                        dense flat color="orange-9" icon="replay" @click="$parent.$emit('rollback_shipment', props.row)" tooltip="撤销并发回待分配" class="ml-2"/>
+                                </template>
                             </q-td>
                         ''')
+                        
+                        def handle_edit_shipment(e):
+                            row = e.args
+                            curr_sid.set_text(row['shipment_id'])
+                            edit_customer.value = row['customer_name']
+                            edit_product.value = row['product_name']
+                            edit_qty.value = row['quantity']
+                            edit_address.value = row['delivery_address']
+                            edit_mode.value = row['ship_type']
+                            dlg_edit.open()
+                            
+                        def handle_cancel_shipment(e):
+                            curr_sid.set_text(e.args['shipment_id'])
+                            dlg_cancel.open()
+                            
+                        def handle_rollback_shipment(e):
+                            curr_sid.set_text(e.args['shipment_id'])
+                            dlg_rollback.open()
                         
                         async def handle_mark_booked(e):
                             await backend_db.update_zhengche_to_yidingche(e.args['shipment_id'])
@@ -256,6 +398,9 @@ async def shipments_content():
                             base = urllib.parse.quote(base_url_input.value.strip('/'), safe='')
                             ui.open(f"/print?id={sid}&base={base}", new_tab=True)
                         
+                        table.on('edit_shipment', handle_edit_shipment)
+                        table.on('cancel_shipment', handle_cancel_shipment)
+                        table.on('rollback_shipment', handle_rollback_shipment)
                         table.on('mark_booked', handle_mark_booked)
                         table.on('show_qr', handle_show_qr)
                         table.on('fill_lingdan', handle_fill_lingdan)
