@@ -20,7 +20,13 @@ init_db()
 
 def get_local_ip() -> str:
     try:
-        return socket.gethostbyname(socket.gethostname())
+        # 使用真实的外部连接探测自身IP，而不是解析hostname以免带入虚拟网卡IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(('10.254.254.254', 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
     except Exception:
         return "127.0.0.1"
 
@@ -137,6 +143,7 @@ async def shipments_content():
                     with ui.row().classes('items-center gap-2'):
                         ui.label('司机端访问前缀:').classes('text-sm text-gray-500')
                         base_url_input = ui.input(value=f"http://{get_local_ip()}:8501").props('dense outlined').classes('w-64')
+                        ui.icon('info', color='grey-5').tooltip('如扫码打不开，请检查手机是否与电脑在同一WiFi，或手动将前缀改为电脑正确的局域网IP')
                         
                         async def do_batch():
                             selected = [row['shipment_id'] for row in table.selected if row['ship_type'] == '零单' and not row.get('batch_id')]
