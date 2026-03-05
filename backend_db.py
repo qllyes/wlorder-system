@@ -9,6 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
+import json
 
 import aiosqlite
 
@@ -69,7 +70,8 @@ async def fetch_all_shipments(
     status: str = '全部',
     customer_name: str = '',
     start_date: str = '',
-    end_date: str = ''
+    end_date: str = '',
+    phone: str = '',
 ) -> list[dict]:
     query = "SELECT * FROM shipments WHERE 1=1"
     params = []
@@ -81,6 +83,10 @@ async def fetch_all_shipments(
     if customer_name:
         query += " AND customer_name LIKE ?"
         params.append(f"%{customer_name.strip()}%")
+
+    if phone:
+        query += " AND customer_phone LIKE ?"
+        params.append(f"%{phone.strip()}%")
         
     if start_date:
         query += " AND date(created_at) >= ?"
@@ -118,28 +124,36 @@ async def create_shipment(
     product_name: str,
     quantity: int,
     delivery_address: str,
-    ship_type: str
+    ship_type: str,
+    customer_phone: str = '',
+    total_weight: float = 0.0,
+    unit_price: float = 0.0,
+    delivery_fee: float = 0.0,
+    freight_fee: float = 0.0,
 ) -> str:
     """
     新建发货单（脱离 orders 表独立运行）。
     初始状态: 整车与零单均默认为 '未订车'。
+    freight_fee = total_weight * unit_price + delivery_fee  (由 app 层计算后传入)
     """
     status = "未订车"
     token = uuid.uuid4().hex if ship_type == "整车" else None
     shipment_id = _generate_id("SHIP")
-    order_id = _generate_id("ORD") # 暂时保留结构兼容性，后续若需可去
+    order_id = _generate_id("ORD")
 
     async with get_conn() as conn:
         await conn.execute(
             """INSERT INTO shipments
                (shipment_id, order_id, ship_type, status,
                 customer_name, delivery_address, product_name, quantity,
-                driver_token)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                driver_token, customer_phone,
+                total_weight, unit_price, delivery_fee, freight_fee)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 shipment_id, order_id, ship_type, status,
                 customer_name, delivery_address, product_name, quantity,
-                token,
+                token, customer_phone,
+                total_weight, unit_price, delivery_fee, freight_fee
             ),
         )
         await conn.commit()
@@ -154,11 +168,17 @@ async def update_shipment_info(
     product_name: str,
     quantity: int,
     delivery_address: str,
-    ship_type: str
+    ship_type: str,
+    pickup_method: str = "送货上门",
+    payment_method: str = "现付",
+    customer_phone: str = '',
+    total_weight: float = 0.0,
+    unit_price: float = 0.0,
+    delivery_fee: float = 0.0,
+    freight_fee: float = 0.0,
 ) -> None:
-    """编辑未发货的发货单基础信息，包含业务模式的切换"""
+    """编辑未发货的发货单基础信息，包含业务模式的切换及打单配置的更新"""
     async with get_conn() as conn:
-        # 首先查询目前的状态
         async with conn.execute(
             "SELECT ship_type, driver_token FROM shipments WHERE shipment_id = ?",
             (shipment_id,)
@@ -169,25 +189,26 @@ async def update_shipment_info(
             old_ship_type = row["ship_type"]
             token = row["driver_token"]
 
-        # 模式切换补齐：如果是新变成'整车'并且以前没有Token，就生成一个；否则剥离Token
         if ship_type == "整车" and old_ship_type != "整车":
             token = uuid.uuid4().hex
         elif ship_type == "零单":
             token = None
             
-        # 若改变了运输模式，应把状态重置为"未订车" (例如本来是整车已订车，改成了零单)
         set_status_snippet = "status='未订车', " if old_ship_type != ship_type else ""
 
         await conn.execute(
             f"""UPDATE shipments
                SET customer_name=?, product_name=?, quantity=?, delivery_address=?, 
                    ship_type=?, driver_token=?, {set_status_snippet}
+                   pickup_method=?, payment_method=?, customer_phone=?,
+                   total_weight=?, unit_price=?, delivery_fee=?, freight_fee=?,
                    driver_name=NULL, driver_id_card=NULL, driver_phone=NULL, truck_plate=NULL, truck_type=NULL,
                    third_party_company=NULL, third_party_tracking=NULL, batch_id=NULL
                WHERE shipment_id=? AND status IN ('未订车', '已订车')""",
-            (customer_name, product_name, quantity, delivery_address, ship_type, token, shipment_id),
+            (customer_name, product_name, quantity, delivery_address, ship_type, token,
+             pickup_method, payment_method, customer_phone,
+             total_weight, unit_price, delivery_fee, freight_fee, shipment_id),
         )
-        await conn.commit()
         await conn.commit()
 
 async def cancel_shipment(shipment_id: str) -> None:
@@ -200,6 +221,26 @@ async def cancel_shipment(shipment_id: str) -> None:
             (shipment_id,),
         )
         await conn.commit()
+
+
+async def batch_delete_shipments(shipment_ids: list[str]) -> int:
+    """硬删除多条发货单记录（不限状态），同时清理商品明细子表。
+    返回实际删除的行数。"""
+    if not shipment_ids:
+        return 0
+    placeholders = ",".join("?" for _ in shipment_ids)
+    async with get_conn() as conn:
+        await conn.execute(
+            f"DELETE FROM shipment_products WHERE shipment_id IN ({placeholders})",
+            shipment_ids,
+        )
+        cur = await conn.execute(
+            f"DELETE FROM shipments WHERE shipment_id IN ({placeholders})",
+            shipment_ids,
+        )
+        deleted = cur.rowcount
+        await conn.commit()
+    return deleted
 
 async def rollback_to_unbooked(shipment_id: str) -> None:
     """逆向业务：异常回退，撤销发货并清空所有的物流/司机绑定信息，重发货车码"""
@@ -315,19 +356,98 @@ async def unbatch_lingdan(shipment_id: str) -> None:
 
 async def update_shipment_fee(
     shipment_id: str,
-    logistics_fee: float,
-    actual_cost: float,
+    actual_unit_price: float,
+    actual_delivery_fee: float,
 ) -> None:
-    """更新费用并自动计算利润。"""
-    profit = round(logistics_fee - actual_cost, 2)
+    """
+    根据实付单价和实付运送费计算 actual_cost （实付运输费），
+    再用已存的 freight_fee （托运单运输费）减去 actual_cost 得出利润。
+    actual_cost = total_weight * actual_unit_price + actual_delivery_fee
+    """
     async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT total_weight, freight_fee FROM shipments WHERE shipment_id = ?",
+            (shipment_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row: return
+            tw = float(row["total_weight"] or 0)
+            ff = float(row["freight_fee"] or 0)
+        
+        actual_cost = round(tw * actual_unit_price + actual_delivery_fee, 2)
+        profit = round(ff - actual_cost, 2)
+        
         await conn.execute(
             """UPDATE shipments
-               SET logistics_fee=?, actual_cost=?, profit=?
+               SET actual_unit_price=?, actual_delivery_fee=?, actual_cost=?, profit=?
                WHERE shipment_id=?""",
-            (logistics_fee, actual_cost, profit, shipment_id),
+            (actual_unit_price, actual_delivery_fee, actual_cost, profit, shipment_id),
         )
         await conn.commit()
+
+
+# ════════════════════════════════════════════════
+#  商品明细子表 CRUD
+# ════════════════════════════════════════════════
+
+async def save_shipment_products(
+    shipment_id: str,
+    products: list[dict],
+) -> None:
+    """先清后插：保存发货单的商品明细行。
+    products 格式: [{'name': str, 'spec': str, 'qty': int, ...任意其他字典项...}, ...]
+    """
+    async with get_conn() as conn:
+        await conn.execute(
+            "DELETE FROM shipment_products WHERE shipment_id = ?",
+            (shipment_id,),
+        )
+        for p in products:
+            raw_json = json.dumps(p, ensure_ascii=False)
+            await conn.execute(
+                """INSERT INTO shipment_products
+                   (shipment_id, product_name, spec, quantity, raw_data)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (shipment_id, p.get('name', ''), p.get('spec', ''), int(p.get('qty', 0)), raw_json),
+            )
+        await conn.commit()
+
+
+async def get_shipment_products(shipment_id: str) -> list[dict]:
+    """获取某发货单的全部商品明细行，包含展开的原始全量字典数据。"""
+    async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT product_name, spec, quantity, raw_data FROM shipment_products WHERE shipment_id = ? ORDER BY id",
+            (shipment_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            
+    result = []
+    for r in rows:
+        item = dict(r)
+        raw_str = item.pop("raw_data", "{}")
+        try:
+            raw_dict = json.loads(raw_str)
+        except Exception:
+            raw_dict = {}
+
+        # ── 标准化核心字段（以 DB 列名为准，兼容旧数据）──
+        merged: dict = {
+            "product_name": item.get("product_name") or raw_dict.get("name") or "",
+            "spec":         item.get("spec") or raw_dict.get("spec") or "",
+            "quantity":     item.get("quantity") or raw_dict.get("qty") or 0,
+        }
+
+        # ── 展开 _raw（原始 Excel 行所有列）到顶层 ──
+        raw_inner = raw_dict.get("_raw", {})
+        if isinstance(raw_inner, dict) and raw_inner:
+            for k, v in raw_inner.items():
+                # _raw 的原始列优先覆盖，不覆盖已有的标准字段
+                if k not in merged:
+                    merged[k] = v
+
+        result.append(merged)
+    return result
 
 
 # ════════════════════════════════════════════════
@@ -338,34 +458,29 @@ async def get_dashboard_stats() -> dict:
     """当日数据看板统计。"""
     today = datetime.date.today().isoformat()
     async with get_conn() as conn:
-        # 当日新增订单
         async with conn.execute(
             "SELECT COUNT(*) FROM orders WHERE date(created_at)=?", (today,)
         ) as cur:
             today_orders = (await cur.fetchone())[0]
 
-        # 积压未发车
         async with conn.execute(
             """SELECT COUNT(*) FROM shipments
                WHERE status IN ('未订车','已订车')"""
         ) as cur:
             pending_count = (await cur.fetchone())[0]
 
-        # 当日已发货
         async with conn.execute(
             "SELECT COUNT(*) FROM shipments WHERE status='已发货' AND date(shipped_at)=?",
             (today,),
         ) as cur:
             shipped_today = (await cur.fetchone())[0]
 
-        # 各状态分布
         async with conn.execute(
             """SELECT status, COUNT(*) as cnt FROM shipments
                GROUP BY status ORDER BY cnt DESC"""
         ) as cur:
             status_dist = [dict(r) for r in await cur.fetchall()]
 
-        # 当日发货明细
         async with conn.execute(
             """SELECT * FROM shipments
                WHERE date(created_at)=? OR date(shipped_at)=?
@@ -402,7 +517,7 @@ async def get_finance_summary() -> dict:
         async with conn.execute(
             """SELECT
                  COUNT(*) as total,
-                  COALESCE(SUM(logistics_fee), 0) as total_fee,
+                  COALESCE(SUM(freight_fee), 0) as total_fee,
                  COALESCE(SUM(actual_cost), 0) as total_cost,
                  COALESCE(SUM(profit), 0) as total_profit
                FROM shipments WHERE status='已发货'"""
@@ -445,4 +560,3 @@ async def delete_spec_weight(spec: str) -> None:
             "DELETE FROM spec_weights WHERE spec = ?", (spec.strip(),)
         )
         await conn.commit()
-

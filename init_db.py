@@ -66,6 +66,42 @@ def init_db() -> None:
     )
     """)
 
+    # ── 动态添加扩展字段 ──
+    _add_columns = [
+        ("pickup_method",       "TEXT DEFAULT '送货上门'"),
+        ("payment_method",      "TEXT DEFAULT '现付'"),
+        ("freight_fee",         "REAL DEFAULT 0"),
+        ("delivery_fee",        "REAL DEFAULT 0"),
+        ("total_weight",        "REAL DEFAULT 0"),
+        ("unit_price",          "REAL DEFAULT 0"),
+        ("actual_unit_price",   "REAL DEFAULT 0"),
+        ("actual_delivery_fee", "REAL DEFAULT 0"),
+        ("customer_phone",      "TEXT DEFAULT ''"),   # 收货人电话
+    ]
+    for col_name, col_def in _add_columns:
+        try:
+            cur.execute(f"ALTER TABLE shipments ADD COLUMN {col_name} {col_def}")
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
+
+    # ── 商品明细子表 ──
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS shipment_products (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        shipment_id  TEXT NOT NULL,
+        product_name TEXT,
+        spec         TEXT,
+        quantity     INTEGER DEFAULT 0,
+        raw_data     TEXT DEFAULT '{}',
+        FOREIGN KEY (shipment_id) REFERENCES shipments(shipment_id)
+    )
+    """)
+    # ── 动态补列（兼容旧数据库缺少 raw_data 的情况）──
+    try:
+        cur.execute("ALTER TABLE shipment_products ADD COLUMN raw_data TEXT DEFAULT '{}'")
+    except sqlite3.OperationalError:
+        pass  # 列已存在，忽略
+
     # ── 规格单重配置表 ──
     cur.execute("""
     CREATE TABLE IF NOT EXISTS spec_weights (
@@ -87,6 +123,23 @@ def init_db() -> None:
         "INSERT OR IGNORE INTO spec_weights (spec, weight_kg) VALUES (?, ?)",
         default_specs,
     )
+
+    # ── 回填：把没有子表记录的历史发货单的 product_name/quantity 写入子表 ──
+    cur.execute("""
+        SELECT s.shipment_id, s.product_name, s.quantity
+        FROM shipments s
+        WHERE s.product_name IS NOT NULL AND s.product_name != ''
+          AND NOT EXISTS (
+              SELECT 1 FROM shipment_products sp WHERE sp.shipment_id = s.shipment_id
+          )
+    """)
+    backfill_rows = cur.fetchall()
+    if backfill_rows:
+        cur.executemany(
+            "INSERT INTO shipment_products (shipment_id, product_name, spec, quantity, raw_data) VALUES (?, ?, '', ?, '{}')",
+            [(r[0], r[1], r[2] or 0) for r in backfill_rows],
+        )
+        print(f"[init_db] 回填了 {len(backfill_rows)} 条历史发货单的商品明细。")
 
     conn.commit()
     conn.close()

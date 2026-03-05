@@ -2,7 +2,7 @@
 waybill_generator.py — 托运单 Excel 生成工具库
 
 主要职责：
-  1. 解析客户订单 Excel（parse_order_excel）
+  1. 解析客户订单 Excel（parse_order_excel）—— 提取全量原始行数据
   2. 计算总重量（calc_total_weight）
   3. 金额转中文大写（num_to_chinese）
   4. 以「托运单.xlsx」为模板生成填充后的字节流（generate_waybill_excel）
@@ -47,16 +47,21 @@ DEFAULT_SPEC_WEIGHTS: dict[str, float] = {
 
 def parse_order_excel(file_path: str | Path) -> dict:
     """
-    解析客户订单 Excel。
+    解析客户订单 Excel，提取完整原始行数据。
 
     返回结构：
     {
-        "order_no": "20260302-12",        # 从文件名提取
+        "order_no": "20260302-12",
         "receiver_name": "仲其林",
         "receiver_phone": "13951240761",
         "receiver_address": "江苏省...193号",
         "products": [
-            {"name": "百香果305ml*12", "spec": "箱", "qty": 80},
+            {
+                "name": "百香果305ml*12",
+                "spec": "箱",
+                "qty": 80,
+                "_raw": {"序号": 1, "发货日期": ..., "商品名称": "百香果305ml*12", ...}
+            },
             ...
         ]
     }
@@ -91,6 +96,16 @@ def parse_order_excel(file_path: str | Path) -> dict:
         if all(v is None for v in row):
             continue
 
+        # ── 构建当前行的原始完整字典（表头 → 值）──
+        raw_row: dict = {}
+        for col_idx, header in enumerate(headers):
+            if header and col_idx < len(row):
+                val = row[col_idx]
+                # datetime 对象转为字符串以便 JSON 序列化
+                if isinstance(val, (datetime.datetime, datetime.date)):
+                    val = val.strftime("%Y-%m-%d")
+                raw_row[str(header).strip()] = val if val is not None else ""
+
         def _g(key: str) -> str:
             i = idx.get(key, -1)
             v = row[i] if (i >= 0 and i < len(row)) else None
@@ -101,9 +116,10 @@ def parse_order_excel(file_path: str | Path) -> dict:
             receiver_phone = _g("收货电话")
             receiver_address = _g("收货地址")
 
-        name = _g("商品名称")
-        spec = _g("规格")
-        qty_raw = _g("数量")
+        # 兼容多种表头命名：优先新名称，fallback 旧名称
+        name = _g("商品名称") or _g("品名")
+        spec = _g("包装/规格") or _g("规格")
+        qty_raw = _g("件数") or _g("数量")
         try:
             qty = int(float(qty_raw)) if qty_raw else 0
         except ValueError:
@@ -114,6 +130,7 @@ def parse_order_excel(file_path: str | Path) -> dict:
                 "name": name,
                 "spec": spec,
                 "qty": qty,
+                "_raw": raw_row,  # 嵌套存储，避免字段名碰撞
             })
 
     return {

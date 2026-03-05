@@ -1,0 +1,63 @@
+# 交互与数据重构：全景商品明细页与 Excel 原始数据存储
+
+## 业务需求分析
+当前的问题在于：
+1. `shipment_products` 只截取了 Excel 中的“品名、规格、数量”，丢失了客户原始 Excel 中的其他字段（可能包含重要备注、特殊尺寸等）。
+2. 在台账行点击查看明细时，弹窗（Dialog）模式空间狭小，且无法承载“在明细级触发打印托运单/导出Excel”的复杂交互，**剥离了信息和操作的连贯性**。
+
+根据 `ux-interaction-designer` 的建议，**最佳方案是采用“页面级下钻 (Drill-down)”**，摒弃弹窗。
+
+---
+
+## 实施方案
+
+### 1. 数据库升级：持久化全量数据
+在保存发货单时，我们将原始 Excel 行的完整字典（JSON）一同存入子表。
+
+#### [MODIFY] [init_db.py](file:///d:/个人需迁移/python_code/wlorder-system/init_db.py)
+在 `shipment_products` 动态添加列 `raw_data TEXT`，默认值为 `{}`，用于存储原封不动的单行字典。
+
+#### [MODIFY] [backend_db.py](file:///d:/个人需迁移/python_code/wlorder-system/backend_db.py)
+- `save_shipment_products`: 接收 `products` 时，将其完整结构 `json.dumps(p)` 存入 `raw_data` 字段。
+- `get_shipment_products`: 将返回字典的 `raw_data` 字段 `json.loads` 反序列化并展开到字典顶层。
+
+### 2. 解析器升级：提取完整行
+#### [MODIFY] [waybill_generator.py](file:///d:/个人需迁移/python_code/wlorder-system/waybill_generator.py)
+`parse_order_excel` 函数在按行读取时，不再只提取特定的 Key。改为：将当前行的每一个表头和对应的值打包成一个 dict，附着在 `products` 元素的底层（与现有的 `name`/`spec`/`qty` 并存）。
+
+### 3. UI 交互大改版：从弹窗升级为「下钻视口」
+#### [MODIFY] [app.py](file:///d:/个人需迁移/python_code/wlorder-system/app.py)
+
+**变更 A：搭建 UI 框架**
+在现在的 `ui.tab_panels` 中新加一个专属面板：
+```python
+with ui.tab_panel('detail_view'):
+    # 顶部动作栏
+    with ui.row().classes('w-full justify-between items-center bg-gray-50 p-4 border-b'):
+        ui.button('⬅️ 返回台账', on_click=lambda: set_panel('dispatch'))
+        with ui.row().classes('gap-2'):
+            ui.button('🖨️ 打印当前托运单', color='blue')
+            ui.button('📥 导出司机明细单', color='green')
+    
+    # 下方：动态列据源宽表
+    detail_full_table = ui.table(...)
+```
+
+**变更 B：事件对接**
+原先台账行的「📋 明细」按钮原来是调用 `show_detail_dialog`，现改为触发事件：
+- 获取当前单据的 `shipment_id`。
+- 获取当前单据的全量商品记录（含动态列）。
+- 根据提取到的字典 Key 自动生成动态列 (Columns)。
+- 填充 `detail_full_table` 的行数据。
+- 执行 `panels.value = 'detail_view'` 发生平滑的 SPA 视觉切换。
+
+**变更 C：废弃弹窗**
+切除原有的 `dlg_detail` 相关的百余行组件定义。对于新发货单手工录入的情况，将只提供基础列，而通过 Excel 导入的将展示庞大的原生矩阵。
+
+---
+
+## 验证计划
+1. **老单兼容性**：重启系统后，旧数据在 `detail_view` 面板中仅显示默认三列，不会产生 JSON 解析崩溃。
+2. **导入穿透测试**：新上传一个带有多余备注列（如"温度要求":"冷藏"）的 Excel 订单。
+3. **下钻体验测试**：在台账表格点击新单的 📋 按钮，页面向左滑动切入新面板，屏幕宽阔展示包含"温度要求"在内的完整表格。
+4. **返显测试**：点击“⬅️ 返回台账”能丝滑返回并发货列表状态。
