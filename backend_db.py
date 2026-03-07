@@ -300,6 +300,18 @@ async def confirm_zhengche_driver(
         await conn.commit()
 
 
+async def update_driver_info(
+    shipment_id: str,
+    name: str,
+    id_card: str,
+    phone: str,
+    plate: str,
+    truck_type: str,
+) -> None:
+    """确认司机信息，作为 confirm_zhengche_driver 的更通用别名。"""
+    await confirm_zhengche_driver(shipment_id, name, id_card, phone, plate, truck_type)
+
+
 # ── 零单状态流转 ──
 
 async def update_lingdan_info(

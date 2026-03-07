@@ -714,8 +714,8 @@ async def shipments_content():
                                     with ui.row().classes('items-center gap-2'):
                                         with ui.button(icon='link', color='gray').props('flat round dense') as link_btn:
                                             ui.tooltip('司机端链接')
-                                        with ui.menu().props('auto-close'):
-                                            ui.input('司机端访问前缀', value=f"http://{get_local_ip()}:8501").props('dense outlined').classes('w-64 p-2')
+                                        with ui.menu():
+                                            base_url_input = ui.input('司机端访问前缀', value=f"http://{get_local_ip()}:8600").props('dense outlined').classes('w-64 p-2')
 
                                 # 下层：紧凑的筛选表单
                                 with ui.row().classes('w-full items-center gap-3 bg-gray-50 p-2 rounded justify-between'):
@@ -1104,9 +1104,58 @@ async def settings_content():
 
 @ui.page('/driver_confirm')
 async def driver_confirm_page(id: str = '', token: str = ''):
-    ship = await backend_db.get_shipment_by_id(id)
-    if not ship or ship['driver_token'] != token: return ui.label('鉴权失败').classes('text-red-500 m-12')
-    ui.label('司机确认发车验证面板').classes('text-2xl m-12')
+    """手机端即扫即用页面，无 Header/Sidebar，移动端适配。"""
+    ui.page_title('司机发车确认')
+    # 注入基础移动端优化 css
+    ui.add_head_html('<style>body { background-color: #F8FAFC; }</style>')
+    
+    with ui.column().classes('w-full max-w-lg mx-auto p-4 items-center min-h-screen'):
+        ui.label('🚚 极速物流发货单').classes('text-2xl font-black text-blue-900 mt-6 mb-8')
+        
+        if not id or not token:
+            ui.label('❌ 二维码无效或缺少参数').classes('text-red-500 font-bold')
+            return
+            
+        ship = await backend_db.get_shipment_by_id(id)
+        if not ship or ship['driver_token'] != token:
+            ui.label('❌ 鉴权失败：订单不存在或发车码失效').classes('text-red-500 font-bold p-6 bg-red-50 rounded text-center')
+            return
+            
+        if ship['status'] == '已发货':
+            with ui.column().classes('w-full items-center p-8 bg-green-50 rounded-xl border border-green-200 mt-10'):
+                ui.icon('check_circle', size='6xl', color='green')
+                ui.label('认证成功').classes('text-2xl font-bold text-green-800 mt-4')
+                ui.label(f"承运人: {ship.get('driver_name', '')} ({ship.get('truck_plate', '')})").classes('text-gray-600 mt-2')
+                ui.label('祝师傅一路顺风，平安到达！').classes('text-green-700 font-bold mt-4')
+            return
+            
+        # ── 正常填报流 ──
+        with ui.card().classes('w-full p-5 rounded-xl border-t-4 border-t-primary shadow-sm mb-6'):
+            ui.label('📦 配送任务简报').classes('font-bold text-gray-500 mb-2')
+            ui.label(f"目的地: {ship['delivery_address']}").classes('text-xl font-bold text-gray-800 leading-tight mb-2')
+            ui.label(f"物品: {ship['product_name']} | {ship['quantity']}件").classes('text-md bg-blue-50 text-blue-800 p-2 rounded')
+            
+        with ui.card().classes('w-full p-5 rounded-xl shadow-sm'):
+            ui.label('🧑‍🔧 填报车辆资质').classes('font-bold text-lg mb-4')
+            d_name = ui.input('真实姓名*').props('outlined dense').classes('w-full mb-3')
+            d_id = ui.input('身份证号').props('outlined dense').classes('w-full mb-3')
+            d_phone = ui.input('手机号*').props('outlined dense type=tel').classes('w-full mb-3')
+            ui.separator().classes('mb-3')
+            t_plate = ui.input('车牌号* (例: 闽A88888)').props('outlined dense').classes('w-full mb-3')
+            t_type = ui.select(['4.2米轻卡','6.8米中卡','9.6米重卡','13.5米挂车','17.5米平板','其他'], 
+                               label='车型*').props('outlined dense').classes('w-full mb-6')
+            
+            async def submit_info():
+                if not all([d_name.value, d_phone.value, t_plate.value, t_type.value]):
+                    ui.notify('请完整填写带有*号的必填信息', type='negative')
+                    return
+                await backend_db.confirm_zhengche_driver(
+                    id, d_name.value, d_id.value, d_phone.value, t_plate.value, t_type.value
+                )
+                ui.notify('确认发车成功！', type='positive')
+                ui.navigate.to(f'/driver_confirm?id={id}&token={token}')
+                
+            ui.button('确认装货完毕，立即发车', on_click=submit_info).classes('w-full h-14 bg-blue-600 text-white font-bold text-lg rounded-lg shadow-lg')
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(title='骄阳物流调度系统', port=8600, host='0.0.0.0', language='zh-CN', favicon='🚚')
