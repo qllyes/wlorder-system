@@ -1106,10 +1106,16 @@ async def settings_content():
 async def driver_confirm_page(id: str = '', token: str = ''):
     """手机端即扫即用页面，无 Header/Sidebar，移动端适配。"""
     ui.page_title('司机发车确认')
-    # 注入基础移动端优化 css
-    ui.add_head_html('<style>body { background-color: #F8FAFC; }</style>')
+    # 注入基础移动端优化 css (覆盖可能冲突的全局样式)
+    ui.add_head_html('''
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <style>
+            body, html { background-color: #F8FAFC !important; margin: 0; padding: 0; visibility: visible !important; min-height: 100vh; }
+            #app { display: flex; flex-direction: column; min-height: 100%; visibility: visible !important; }
+        </style>
+    ''')
     
-    with ui.column().classes('w-full max-w-lg mx-auto p-4 items-center min-h-screen'):
+    with ui.column().classes('w-full max-w-lg mx-auto p-4 items-center min-h-screen').style('visibility: visible !important;'):
         ui.label('🚚 极速物流发货单').classes('text-2xl font-black text-blue-900 mt-6 mb-8')
         
         if not id or not token:
