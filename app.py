@@ -430,6 +430,20 @@ async def shipments_content():
                         ui.button('取消', on_click=dlg_batch_del.close).props('outline')
                         confirm_btn = ui.button('确认删除', color='red')
 
+                selected_ids_for_delete: list[str] = []
+
+                async def confirm_batch_delete():
+                    if not selected_ids_for_delete:
+                        ui.notify('未检测到可删除的发货单记录', type='warning')
+                        dlg_batch_del.close()
+                        return
+                    deleted = await backend_db.batch_delete_shipments(selected_ids_for_delete)
+                    ui.notify(f'已删除 {deleted} 条发货单记录', type='positive')
+                    dlg_batch_del.close()
+                    list_refreshable.refresh()
+
+                confirm_btn.on_click(confirm_batch_delete)
+
                 curr_sid = ui.label().classes('hidden')
 
                 curr_sid = ui.label().classes('hidden')
@@ -693,14 +707,16 @@ async def shipments_content():
                                                 ui.notify(f'合单成功: {bid}', type='positive')
                                                 list_refreshable.refresh()
                                                 
-                                            def on_batch_preview():
-                                                execute_batch_preview([row for row in table.selected])
+                                            async def on_batch_preview():
+                                                await display_batch_print_dialog([row for row in table.selected])
                                                 
                                             async def on_batch_export():
                                                 await execute_batch_export([row for row in table.selected])
                                                 
                                             def do_batch_delete():
-                                                batch_del_info.text = f'即将永久删除 {len(table.selected)} 条发货单记录，此操作不可恢复！'
+                                                nonlocal selected_ids_for_delete
+                                                selected_ids_for_delete = [row['shipment_id'] for row in table.selected]
+                                                batch_del_info.text = f'即将永久删除 {len(selected_ids_for_delete)} 条发货单记录，此操作不可恢复！'
                                                 dlg_batch_del.open()
                                                 
                                             ui.button('🔗 零单合单', on_click=do_batch_lingdan).props('outline dense color=secondary')
