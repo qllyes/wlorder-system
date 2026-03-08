@@ -33,6 +33,16 @@ def get_local_ip() -> str:
     except Exception:
         return "127.0.0.1"
 
+
+
+def parse_logistics_options(raw: str) -> list[str]:
+    values = [x.strip() for x in (raw or '').replace('，', ',').split(',') if x.strip()]
+    uniq = []
+    for v in values:
+        if v not in uniq:
+            uniq.append(v)
+    return uniq
+
 def generate_qr_base64(data: str) -> str:
     """根据字符串生成二维码图像的 Base64 编码"""
     qr = qrcode.QRCode(box_size=10, border=2)
@@ -296,6 +306,9 @@ async def shipments_content():
     async def main_shipments_refreshable():
         default_driver_base_url = f"http://{get_local_ip()}:8600"
         persisted_driver_base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+        default_logistics_options = '整车,罗氏物流,小鹏物流'
+        persisted_logistics_options = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
+        logistics_options = parse_logistics_options(persisted_logistics_options)
 
         with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-6'):
             with ui.row().classes('w-full justify-between items-center'):
@@ -373,7 +386,7 @@ async def shipments_content():
                             new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
                         with ui.row().classes('w-full gap-2 mb-2 items-center'):
                             new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700 flex-1')
-                            mode_choice = ui.radio(['整车', '零单'], value='整车').props('inline').classes('flex-1')
+                            ui.label('业务模式将由后续【分配物流】自动判定（整车/零单）').classes('text-xs text-gray-500 flex-1')
                     
                     async def submit_shipment():
                         if not customer_input.value or not product_input.value or not address_input.value:
@@ -394,7 +407,7 @@ async def shipments_content():
                             product_input.value,
                             int(qty_input.value), 
                             address_input.value,
-                            mode_choice.value,
+                            '待分配',
                             customer_phone=phone_input.value,
                             total_weight=total_weight_t,
                             unit_price=up,
@@ -510,19 +523,35 @@ async def shipments_content():
 
                 # ── 其它弹窗 (扫码, 补录快递单, 撤销, 作废) ──
                 dlg_lingdan = ui.dialog()
-                with dlg_lingdan, ui.card().classes('min-w-[400px] p-6'):
-                    ui.label('补录第三方物流信息').classes('font-bold text-lg mb-4')
-                    comp_in = ui.input('第三方物流公司*').classes('w-full mb-2')
-                    trk_in = ui.input('运单号*').classes('w-full mb-4')
+                with dlg_lingdan, ui.card().classes('min-w-[460px] p-6'):
+                    ui.label('分配物流并自动判定业务模式').classes('font-bold text-lg mb-1')
+                    ui.label('可从已配置物流中选择，也可直接手动填写').classes('text-xs text-gray-500 mb-4')
+
+                    comp_sel = ui.select(logistics_options, label='选择已配置物流').classes('w-full mb-2')
+                    comp_in = ui.input('或手动填写物流名称').classes('w-full mb-2')
+                    trk_in = ui.input('运单号（整车可不填）').classes('w-full mb-1')
+                    ui.label('规则：物流=整车 → 业务模式整车；其他物流公司 → 业务模式零单').classes('text-[11px] text-blue-600 mb-3')
+
                     async def save_lingdan():
-                        if not comp_in.value or not trk_in.value: return
-                        await backend_db.update_lingdan_info(curr_sid.text, comp_in.value, trk_in.value)
-                        ui.notify('零单发货完成', type='positive')
+                        provider = (comp_in.value or comp_sel.value or '').strip()
+                        tracking_no = (trk_in.value or '').strip()
+                        if not provider:
+                            ui.notify('请填写或选择物流公司', type='warning')
+                            return
+                        if provider != '整车' and not tracking_no:
+                            ui.notify('第三方物流需填写运单号', type='warning')
+                            return
+                        await backend_db.assign_logistics(curr_sid.text, provider, tracking_no)
+                        if provider == '整车':
+                            ui.notify('已分配为整车，状态更新为已订车', type='positive')
+                        else:
+                            ui.notify('已分配第三方物流并完成发货', type='positive')
                         dlg_lingdan.close()
                         list_refreshable.refresh()
+
                     with ui.row().classes('w-full justify-end gap-2'):
                         ui.button('取消', on_click=dlg_lingdan.close).props('flat')
-                        ui.button('保存并发货', on_click=save_lingdan, color='primary')
+                        ui.button('确认分配', on_click=save_lingdan, color='primary')
                         
                 dlg_qr = ui.dialog()
                 with dlg_qr, ui.card().classes('p-6 items-center'):
@@ -751,10 +780,31 @@ async def shipments_content():
 
                                                 ui.button('保存链接前缀', on_click=save_driver_base_url, color='primary').props('dense')
 
+                                        with ui.button(icon='local_shipping', color='gray').props('flat round dense') as logistics_btn:
+                                            ui.tooltip('物流选项配置')
+                                        with ui.menu():
+                                            with ui.column().classes('w-80 p-2 gap-2'):
+                                                logistics_opt_input = ui.input(
+                                                    '物流选项（逗号分隔）',
+                                                    value=','.join(logistics_options) if logistics_options else default_logistics_options,
+                                                ).props('dense outlined').classes('w-full')
+
+                                                async def save_logistics_options():
+                                                    nonlocal logistics_options
+                                                    parsed = parse_logistics_options(logistics_opt_input.value)
+                                                    if not parsed:
+                                                        ui.notify('请至少保留一个物流选项', type='warning')
+                                                        return
+                                                    logistics_options = parsed
+                                                    await backend_db.set_setting('logistics_provider_options', ','.join(parsed))
+                                                    ui.notify('物流选项已保存', type='positive')
+
+                                                ui.button('保存物流选项', on_click=save_logistics_options, color='primary').props('dense')
+
                                 # 下层：紧凑的筛选表单
                                 with ui.row().classes('w-full items-center gap-3 bg-gray-50 p-2 rounded justify-between'):
                                     with ui.row().classes('items-center gap-3'):
-                                        status_sel = ui.select(['全部', '未订车', '已订车', '已发货', '已作废'], value=filter_status['value'], label='状态').props('dense outlined').classes('w-28')
+                                        status_sel = ui.select(['全部', '待分配物流', '未订车', '已订车', '已发货', '已作废'], value=filter_status['value'], label='状态').props('dense outlined').classes('w-28')
                                         cust_in = ui.input('收货人', value=filter_customer['value']).props('dense outlined').classes('w-32')
                                         phone_in = ui.input('手机号', value=filter_phone['value']).props('dense outlined').classes('w-32')
                                         start_in = ui.input('开始日期', value=filter_start['value']).props('dense outlined').classes('w-32')
@@ -805,7 +855,7 @@ async def shipments_content():
                         table.add_slot('body-cell-status', '''
                             <q-td :props="props">
                                 <q-chip 
-                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\'))" 
+                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'待分配物流\' ? \'blue\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\')))" 
                                     text-color="white" dense size="sm">
                                     {{ props.row.status }}
                                 </q-chip>
@@ -821,9 +871,11 @@ async def shipments_content():
                         table.add_slot('body-cell-actions', '''
                             <q-td :props="props">
                                 <template v-if="props.row.status !== \'已作废\'">
-                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                    <q-btn v-if="props.row.status === \'待分配物流\' || props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
                                         dense flat color="blue-7" icon="edit" @click="$parent.$emit('edit_shipment', props.row)" class="mr-1"/>
                                     <q-btn dense flat color="teal-7" icon="list_alt" @click="$parent.$emit('show_detail', props.row)" class="mr-1"/>
+                                    <q-btn v-if="props.row.status === '待分配物流'" 
+                                        dense color="primary" icon="local_shipping" label="分配物流" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'未订车\'" 
                                         dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
@@ -832,7 +884,7 @@ async def shipments_content():
                                         dense flat color="teal-7" icon="history" label="查看回执" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
                                         dense color="orange" label="补录快递" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
-                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                    <q-btn v-if="props.row.status === \'待分配物流\' || props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
                                         dense flat color="red-5" icon="delete" @click="$parent.$emit('cancel_shipment', props.row)" class="ml-2"/>
                                     <q-btn v-if="props.row.status === \'已发货\'" 
                                         dense flat color="orange-9" icon="replay" @click="$parent.$emit('rollback_shipment', props.row)" class="ml-2"/>
@@ -885,8 +937,11 @@ async def shipments_content():
                                 ui.notify(f'凭证生成失败：{ex}', type='negative')
                             dlg_qr.open()
                             
-                        def handle_fill_lingdan(e):
+                        async def handle_fill_lingdan(e):
                             curr_sid.set_text(e.args['shipment_id'])
+                            latest_opts_raw = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
+                            comp_sel.options = parse_logistics_options(latest_opts_raw)
+                            comp_sel.value = None
                             comp_in.value = ''
                             trk_in.value = ''
                             dlg_lingdan.open()

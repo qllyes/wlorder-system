@@ -136,8 +136,9 @@ async def create_shipment(
     初始状态: 整车与零单均默认为 '未订车'。
     freight_fee = total_weight * unit_price + delivery_fee  (由 app 层计算后传入)
     """
-    status = "未订车"
-    token = uuid.uuid4().hex if ship_type == "整车" else None
+    # 新建时不再强制指定承运模式，统一进入“待分配物流”池，由文员后置分配
+    status = "待分配物流"
+    token = None
     shipment_id = _generate_id("SHIP")
     order_id = _generate_id("ORD")
 
@@ -329,6 +330,63 @@ async def update_lingdan_info(
                WHERE shipment_id=?""",
             (company, tracking, shipment_id),
         )
+        await conn.commit()
+
+
+async def assign_logistics(
+    shipment_id: str,
+    logistics_provider: str,
+    tracking: str = '',
+) -> None:
+    """后置分配物流并自动判定业务模式。
+
+    规则：
+    - 物流=整车 -> ship_type=整车, status=已订车, 生成/保留 driver_token
+    - 物流!=整车 -> ship_type=零单, status=已发货(需运单号)
+    """
+    provider = (logistics_provider or '').strip()
+    track = (tracking or '').strip()
+    if not provider:
+        return
+
+    async with get_conn() as conn:
+        if provider == '整车':
+            async with conn.execute(
+                "SELECT driver_token FROM shipments WHERE shipment_id=?",
+                (shipment_id,),
+            ) as cur:
+                row = await cur.fetchone()
+            token = (row['driver_token'] if row else None) or uuid.uuid4().hex
+
+            await conn.execute(
+                """UPDATE shipments
+                   SET logistics_provider=?,
+                       ship_type='整车',
+                       status='已订车',
+                       driver_token=?,
+                       shipped_at=NULL,
+                       third_party_company=NULL,
+                       third_party_tracking=NULL
+                   WHERE shipment_id=?""",
+                (provider, token, shipment_id),
+            )
+        else:
+            if not track:
+                return
+            await conn.execute(
+                """UPDATE shipments
+                   SET logistics_provider=?,
+                       ship_type='零单',
+                       status='已发货',
+                       driver_token=NULL,
+                       driver_name=NULL, driver_id_card=NULL, driver_phone=NULL,
+                       truck_plate=NULL, truck_type=NULL,
+                       third_party_company=?,
+                       third_party_tracking=?,
+                       shipped_at=datetime('now','localtime')
+                   WHERE shipment_id=?""",
+                (provider, provider, track, shipment_id),
+            )
         await conn.commit()
 
 

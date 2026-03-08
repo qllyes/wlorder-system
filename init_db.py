@@ -77,6 +77,7 @@ def init_db() -> None:
         ("actual_unit_price",   "REAL DEFAULT 0"),
         ("actual_delivery_fee", "REAL DEFAULT 0"),
         ("customer_phone",      "TEXT DEFAULT ''"),   # 收货人电话
+        ("logistics_provider",  "TEXT DEFAULT ''"),   # 后置分配物流公司/承运方式
     ]
     for col_name, col_def in _add_columns:
         try:
