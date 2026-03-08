@@ -463,6 +463,8 @@ async def shipments_content():
 
                 curr_sid = ui.label().classes('hidden')
                 current_edit_ship_type = {'value': '待分配'}
+                current_edit_logistics = {'value': ''}
+                current_edit_logistics_mutable = {'value': False}
 
                 smart_logistics_selectors = []
 
@@ -509,12 +511,23 @@ async def shipments_content():
                     def refresh_options():
                         select_el.options = logistics_options
 
+                    def set_editable(can_edit: bool):
+                        if can_edit:
+                            select_el.enable()
+                            input_el.enable()
+                            toggle_btn.enable()
+                        else:
+                            select_el.disable()
+                            input_el.disable()
+                            toggle_btn.disable()
+
                     toggle_btn.on_click(toggle_mode)
 
                     selector = {
                         'set_value': set_value,
                         'get_value': get_value,
                         'refresh_options': refresh_options,
+                        'set_editable': set_editable,
                     }
                     smart_logistics_selectors.append(selector)
                     return selector
@@ -570,8 +583,11 @@ async def shipments_content():
                         df = float(edit_delivery.value or 0)
                         freight_fee = round(total_weight_t * up + df, 2)
                         
-                        provider = edit_selector['get_value']()
-                        inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
+                        provider = current_edit_logistics['value']
+                        inferred_mode = current_edit_ship_type['value']
+                        if current_edit_logistics_mutable['value']:
+                            provider = edit_selector['get_value']()
+                            inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
 
                         await backend_db.update_shipment_info(
                             curr_sid.text, edit_customer.value, edit_product.value, 
@@ -875,7 +891,7 @@ async def shipments_content():
                                 # 下层：紧凑的筛选表单
                                 with ui.row().classes('w-full items-center gap-3 bg-gray-50 p-2 rounded justify-between'):
                                     with ui.row().classes('items-center gap-3'):
-                                        status_sel = ui.select(['全部', '待分配物流', '未订车', '已订车', '已发货', '已作废'], value=filter_status['value'], label='状态').props('dense outlined').classes('w-28')
+                                        status_sel = ui.select(['全部', '未订车', '已订车', '已发货', '已作废'], value=filter_status['value'], label='状态').props('dense outlined').classes('w-28')
                                         cust_in = ui.input('收货人', value=filter_customer['value']).props('dense outlined').classes('w-32')
                                         phone_in = ui.input('手机号', value=filter_phone['value']).props('dense outlined').classes('w-32')
                                         start_in = ui.input('开始日期', value=filter_start['value']).props('dense outlined').classes('w-32')
@@ -926,7 +942,7 @@ async def shipments_content():
                         table.add_slot('body-cell-status', '''
                             <q-td :props="props">
                                 <q-chip 
-                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'待分配物流\' ? \'blue\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\')))" 
+                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'blue\' : \'orange\'))" 
                                     text-color="white" dense size="sm">
                                     {{ props.row.status }}
                                 </q-chip>
@@ -942,10 +958,10 @@ async def shipments_content():
                         table.add_slot('body-cell-actions', '''
                             <q-td :props="props">
                                 <template v-if="props.row.status !== \'已作废\'">
-                                    <q-btn v-if="props.row.status === \'待分配物流\' || props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
                                         dense flat color="blue-7" icon="edit" @click="$parent.$emit('edit_shipment', props.row)" class="mr-1"/>
                                     <q-btn dense flat color="teal-7" icon="list_alt" @click="$parent.$emit('show_detail', props.row)" class="mr-1"/>
-                                    <q-btn v-if="props.row.status === '待分配物流'" 
+                                    <q-btn v-if="props.row.status === '未订车'" 
                                         dense color="primary" icon="local_shipping" label="分配物流" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'未订车\'" 
                                         dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
@@ -955,7 +971,7 @@ async def shipments_content():
                                         dense flat color="teal-7" icon="history" label="查看回执" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
                                         dense color="orange" label="补录快递" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
-                                    <q-btn v-if="props.row.status === \'待分配物流\' || props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
                                         dense flat color="red-5" icon="delete" @click="$parent.$emit('cancel_shipment', props.row)" class="ml-2"/>
                                     <q-btn v-if="props.row.status === \'已发货\'" 
                                         dense flat color="orange-9" icon="replay" @click="$parent.$emit('rollback_shipment', props.row)" class="ml-2"/>
@@ -971,8 +987,16 @@ async def shipments_content():
                             edit_qty.value = row['quantity']
                             edit_address.value = row['delivery_address']
                             current_edit_ship_type['value'] = row.get('ship_type', '待分配')
-                            edit_selector['set_value'](row.get('logistics_provider') or '')
-                            edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')}"
+                            provider = (row.get('logistics_provider') or '').strip()
+                            current_edit_logistics['value'] = provider
+                            can_modify_logistics = bool(provider)
+                            current_edit_logistics_mutable['value'] = can_modify_logistics
+                            edit_selector['set_value'](provider)
+                            edit_selector['set_editable'](can_modify_logistics)
+                            if can_modify_logistics:
+                                edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')} | 可修改物流"
+                            else:
+                                edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')} | 未分配物流时不可修改"
                             edit_pickup.value = row.get('pickup_method', '送货上门')
                             edit_payment.value = row.get('payment_method', '现付')
                             edit_unit_price.value = row.get('unit_price', 0)
