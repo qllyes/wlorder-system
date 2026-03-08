@@ -473,21 +473,33 @@ async def shipments_content():
                     with ui.row().classes('w-full items-start gap-1 mb-2'):
                         select_el = ui.select(logistics_options, label='物流选项*').props('use-input fill-input').classes('flex-1')
                         input_el = ui.input('输入新物流*').classes('flex-1 hidden')
-                        toggle_btn = ui.button(icon='add').props('flat round dense color=primary')
-                        ui.tooltip('新增物流')
+                        toggle_btn = ui.button(icon='add_circle').props('flat round dense color=primary')
+                        with toggle_btn:
+                            toggle_tip = ui.tooltip('切换到新增物流输入')
+
+                    mode_hint = ui.label('当前：历史物流选择').classes('text-[11px] text-gray-400 -mt-1 mb-2')
+
+                    def update_toggle_ux(is_input_mode: bool):
+                        if is_input_mode:
+                            toggle_btn.props('icon=format_list_bulleted color=secondary')
+                            toggle_tip.text = '切回历史物流列表'
+                            mode_hint.text = '当前：新增物流输入'
+                        else:
+                            toggle_btn.props('icon=add_circle color=primary')
+                            toggle_tip.text = '切换到新增物流输入'
+                            mode_hint.text = '当前：历史物流选择'
+                        toggle_btn.update()
+                        mode_hint.update()
 
                     def set_input_mode(is_input_mode: bool):
                         state['input_mode'] = is_input_mode
                         if is_input_mode:
                             select_el.classes(add='hidden')
                             input_el.classes(remove='hidden')
-                            toggle_btn.props('icon=history')
-                            toggle_btn.update()
                         else:
                             input_el.classes(add='hidden')
                             select_el.classes(remove='hidden')
-                            toggle_btn.props('icon=add')
-                            toggle_btn.update()
+                        update_toggle_ux(is_input_mode)
 
                     def toggle_mode():
                         set_input_mode(not state['input_mode'])
