@@ -33,6 +33,16 @@ def get_local_ip() -> str:
     except Exception:
         return "127.0.0.1"
 
+
+
+def parse_logistics_options(raw: str) -> list[str]:
+    values = [x.strip() for x in (raw or '').replace('，', ',').split(',') if x.strip()]
+    uniq = []
+    for v in values:
+        if v not in uniq:
+            uniq.append(v)
+    return uniq
+
 def generate_qr_base64(data: str) -> str:
     """根据字符串生成二维码图像的 Base64 编码"""
     qr = qrcode.QRCode(box_size=10, border=2)
@@ -294,82 +304,89 @@ _page_ctx: dict = {}
 async def shipments_content():
     @ui.refreshable
     async def main_shipments_refreshable():
+        default_driver_base_url = f"http://{get_local_ip()}:8600"
+        persisted_driver_base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+        default_logistics_options = '整车,罗氏物流,小鹏物流'
+        persisted_logistics_options = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
+        logistics_options = parse_logistics_options(persisted_logistics_options)
+
         with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-6'):
             with ui.row().classes('w-full justify-between items-center'):
                 ui.label('发货单调度与管理').classes('text-2xl font-bold tracking-tight text-gray-800')
                 
                 # ── 新建发货单入口 ──
                 dlg_new_shipment = ui.dialog()
-                with dlg_new_shipment, ui.card().classes('min-w-[540px] p-6'):
-                    with ui.row().classes('w-full justify-between items-center mb-4'):
-                        ui.label('📝 新建发货单').classes('text-lg font-bold')
+                with dlg_new_shipment, ui.card().classes('w-[920px] max-w-[96vw] max-h-[90vh] p-0 overflow-y-auto'):
+                    with ui.row().classes('w-full justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100'):
+                        with ui.column().classes('gap-0'):
+                            ui.label('📝 新建发货单').classes('text-lg font-bold text-gray-800')
+                            ui.label('支持手工录入与 Excel 一键回填').classes('text-xs text-gray-500')
                         ui.button(icon='close', on_click=dlg_new_shipment.close).props('flat round dense')
                     
                     imported_products: list[dict] = []
                     
-                    ui.label('数据录入方式').classes('text-xs font-bold text-gray-400 mb-1')
-                    mode_tabs = ui.radio(['✍️ 手工填写', '📑 Excel 导入'], value='✍️ 手工填写').props('inline').classes('mb-2')
+                    with ui.card().classes('mx-6 mt-4 p-5 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
+                        ui.label('数据录入方式').classes('text-xs font-bold text-gray-500 mb-2')
+                        ui.label('推荐：先导入 Excel 自动回填，再快速补全字段').classes('text-xs text-gray-400 mb-3')
+                        mode_tabs = ui.tabs().classes('w-full')
+                        with mode_tabs:
+                            manual_tab = ui.tab('✍️ 手工录入')
+                            excel_tab = ui.tab('📑 Excel 导入')
+                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-2'):
+                            with ui.tab_panel(manual_tab).classes('px-0 py-2'):
+                                ui.label('手工模式：适合临时新增，支持快速填单').classes('text-sm text-gray-500')
+                            with ui.tab_panel(excel_tab).classes('px-0 py-2'):
+                                with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100'):
+                                    ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
+                                    ui.label('从客户订单 Excel 导入并自动回填').classes('text-sm font-bold text-blue-800 flex-1')
+
+                                    async def on_excel_upload(e):
+                                        try:
+                                            import tempfile, os, asyncio
+                                            filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
+                                            suffix = Path(filename).suffix or '.xlsx'
+                                            content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
+                                            if content_io is None: return
+                                            raw = content_io.read()
+                                            if asyncio.iscoroutine(raw): raw = await raw
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                                                tmp.write(raw)
+                                                tmp_path = tmp.name
+
+                                            data = waybill_generator.parse_order_excel(tmp_path)
+                                            os.unlink(tmp_path)
+
+                                            customer_input.value = data['receiver_name']
+                                            phone_input.value = data['receiver_phone']
+                                            address_input.value = data['receiver_address']
+
+                                            prods = data.get('products', [])
+                                            if prods:
+                                                product_input.value = '、'.join([p['name'] for p in prods[:3]])
+                                                qty_input.value = sum(p['qty'] for p in prods)
+                                            imported_products.clear()
+                                            imported_products.extend(prods)
+                                            ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品', type='positive')
+                                        except Exception as ex:
+                                            ui.notify(f'导入失败：{ex}', type='negative')
+
+                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='上传 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
                     
-                    upload_container = ui.row().classes('w-full items-center mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100 hidden')
-                    with upload_container:
-                        ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
-                        ui.label('从客户订单Excel导入').classes('text-sm font-bold text-blue-800 flex-1')
-                        
-                        async def on_excel_upload(e):
-                            try:
-                                import tempfile, os, asyncio
-                                filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
-                                suffix = Path(filename).suffix or '.xlsx'
-                                content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
-                                if content_io is None: return
-                                raw = content_io.read()
-                                if asyncio.iscoroutine(raw): raw = await raw
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                                    tmp.write(raw)
-                                    tmp_path = tmp.name
-                                
-                                data = waybill_generator.parse_order_excel(tmp_path)
-                                os.unlink(tmp_path)
-                                
-                                customer_input.value = data['receiver_name']
-                                phone_input.value = data['receiver_phone']
-                                address_input.value = data['receiver_address']
-                                
-                                prods = data.get('products', [])
-                                if prods:
-                                    product_input.value = '、'.join([p['name'] for p in prods[:3]])
-                                    qty_input.value = sum(p['qty'] for p in prods)
-                                imported_products.clear()
-                                imported_products.extend(prods)
-                                ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品', type='positive')
-                            except Exception as ex:
-                                ui.notify(f'导入失败：{ex}', type='negative')
-                        
-                        ui.upload(on_upload=on_excel_upload, auto_upload=True, label='选择 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
-                        
-                    def on_tab_change(e):
-                        if e.value == '📑 Excel 导入':
-                            upload_container.classes(remove='hidden')
-                        else:
-                            upload_container.classes(add='hidden')
-                    mode_tabs.on_value_change(on_tab_change)
+                    with ui.column().classes('px-6 pb-4 gap-1'):
+                        customer_input = ui.input('收货人*').classes('w-full mb-2')
+                        phone_input = ui.input('收货电话').classes('w-full mb-2')
+                        product_input = ui.input('货物品类*').classes('w-full mb-2')
+                        qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
+                        address_input = ui.input('收货详细地址*').classes('w-full mb-2')
                     
-                    ui.separator().classes('my-2')
-                    
-                    customer_input = ui.input('收货人*').classes('w-full mb-2')
-                    phone_input = ui.input('收货电话').classes('w-full mb-2')
-                    product_input = ui.input('货物品类*').classes('w-full mb-2')
-                    qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
-                    address_input = ui.input('收货详细地址*').classes('w-full mb-2')
-                    
-                    ui.separator().classes('my-4')
-                    ui.label('运费配置*').classes('text-xs font-bold text-gray-400 mb-1')
-                    with ui.row().classes('w-full gap-2 mb-2'):
-                        new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
-                        new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
-                    with ui.row().classes('w-full gap-2 mb-2 items-center'):
-                        new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700 flex-1')
-                        mode_choice = ui.radio(['整车', '零单'], value='整车').props('inline').classes('flex-1')
+                        ui.separator().classes('my-4')
+                        ui.label('运费配置*').classes('text-xs font-bold text-gray-400 mb-1')
+                        with ui.row().classes('w-full gap-2 mb-2'):
+                            new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
+                            new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
+                        with ui.row().classes('w-full gap-2 mb-2 items-center'):
+                            new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700 flex-1')
+                            ui.label('业务模式将由后续【分配物流】自动判定（整车/零单）').classes('text-xs text-gray-500 flex-1')
                     
                     async def submit_shipment():
                         if not customer_input.value or not product_input.value or not address_input.value:
@@ -390,7 +407,7 @@ async def shipments_content():
                             product_input.value,
                             int(qty_input.value), 
                             address_input.value,
-                            mode_choice.value,
+                            '待分配',
                             customer_phone=phone_input.value,
                             total_weight=total_weight_t,
                             unit_price=up,
@@ -413,7 +430,7 @@ async def shipments_content():
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
-                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                    with ui.row().classes('w-full justify-end gap-2 mt-6 px-6 py-4 bg-white border-t border-gray-100'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
                 
@@ -430,9 +447,24 @@ async def shipments_content():
                         ui.button('取消', on_click=dlg_batch_del.close).props('outline')
                         confirm_btn = ui.button('确认删除', color='red')
 
+                selected_ids_for_delete: list[str] = []
+
+                async def confirm_batch_delete():
+                    if not selected_ids_for_delete:
+                        ui.notify('未检测到可删除的发货单记录', type='warning')
+                        dlg_batch_del.close()
+                        return
+                    deleted = await backend_db.batch_delete_shipments(selected_ids_for_delete)
+                    ui.notify(f'已删除 {deleted} 条发货单记录', type='positive')
+                    dlg_batch_del.close()
+                    list_refreshable.refresh()
+
+                confirm_btn.on_click(confirm_batch_delete)
+
                 curr_sid = ui.label().classes('hidden')
 
                 curr_sid = ui.label().classes('hidden')
+                current_edit_ship_type = {'value': '待分配'}
                 
                 # ── 弹窗：编辑发货单 ──
                 dlg_edit = ui.dialog()
@@ -456,9 +488,10 @@ async def shipments_content():
                         edit_delivery = ui.number('运送费(元)', value=0, min=0, format='%.2f').classes('flex-1')
                         
                     ui.separator().classes('my-4')
-                    ui.label('业务模式').classes('text-xs font-bold text-gray-400 mb-1')
-                    edit_mode = ui.radio(['整车', '零单'], value='整车').props('inline')
-                    ui.label('如果更改了业务模式，将会清理绑定的物流并重置回未订车状态。').classes('text-[10px] text-orange-500 mb-4')
+                    ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
+                    edit_logistics_sel = ui.select(logistics_options, label='选择已配置物流').classes('w-full mb-2')
+                    edit_logistics_input = ui.input('或手动填写物流名称').classes('w-full mb-1')
+                    edit_mode_hint = ui.label('当前业务模式：待分配').classes('text-[11px] text-blue-600 mb-4')
                     
                     async def save_edit():
                         if not edit_customer.value or not edit_product.value or not edit_address.value:
@@ -473,18 +506,23 @@ async def shipments_content():
                         df = float(edit_delivery.value or 0)
                         freight_fee = round(total_weight_t * up + df, 2)
                         
+                        provider = (edit_logistics_input.value or edit_logistics_sel.value or '').strip()
+                        inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
+
                         await backend_db.update_shipment_info(
                             curr_sid.text, edit_customer.value, edit_product.value, 
-                            int(edit_qty.value), edit_address.value, edit_mode.value,
+                            int(edit_qty.value), edit_address.value, inferred_mode,
                             edit_pickup.value, edit_payment.value,
                             total_weight=total_weight_t, unit_price=up,
                             delivery_fee=df, freight_fee=freight_fee,
                         )
+                        if provider:
+                            await backend_db.set_shipment_logistics_provider(curr_sid.text, provider)
                         ui.notify(f'修改已保存 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         dlg_edit.close()
                         list_refreshable.refresh()
                         
-                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                    with ui.row().classes('w-full justify-end gap-2 mt-6'):
                         ui.button('取消', on_click=dlg_edit.close).props('outline text-gray-600 border-gray-300')
                         ui.button('保存修改', on_click=save_edit, color='primary')
                 
@@ -492,19 +530,35 @@ async def shipments_content():
 
                 # ── 其它弹窗 (扫码, 补录快递单, 撤销, 作废) ──
                 dlg_lingdan = ui.dialog()
-                with dlg_lingdan, ui.card().classes('min-w-[400px] p-6'):
-                    ui.label('补录第三方物流信息').classes('font-bold text-lg mb-4')
-                    comp_in = ui.input('第三方物流公司*').classes('w-full mb-2')
-                    trk_in = ui.input('运单号*').classes('w-full mb-4')
+                with dlg_lingdan, ui.card().classes('min-w-[460px] p-6'):
+                    ui.label('分配物流并自动判定业务模式').classes('font-bold text-lg mb-1')
+                    ui.label('可从已配置物流中选择，也可直接手动填写').classes('text-xs text-gray-500 mb-4')
+
+                    comp_sel = ui.select(logistics_options, label='选择已配置物流').classes('w-full mb-2')
+                    comp_in = ui.input('或手动填写物流名称').classes('w-full mb-2')
+                    trk_in = ui.input('运单号（整车可不填）').classes('w-full mb-1')
+                    ui.label('规则：物流=整车 → 业务模式整车；其他物流公司 → 业务模式零单').classes('text-[11px] text-blue-600 mb-3')
+
                     async def save_lingdan():
-                        if not comp_in.value or not trk_in.value: return
-                        await backend_db.update_lingdan_info(curr_sid.text, comp_in.value, trk_in.value)
-                        ui.notify('零单发货完成', type='positive')
+                        provider = (comp_in.value or comp_sel.value or '').strip()
+                        tracking_no = (trk_in.value or '').strip()
+                        if not provider:
+                            ui.notify('请填写或选择物流公司', type='warning')
+                            return
+                        if provider != '整车' and not tracking_no:
+                            ui.notify('第三方物流需填写运单号', type='warning')
+                            return
+                        await backend_db.assign_logistics(curr_sid.text, provider, tracking_no)
+                        if provider == '整车':
+                            ui.notify('已分配为整车，状态更新为已订车', type='positive')
+                        else:
+                            ui.notify('已分配第三方物流并完成发货', type='positive')
                         dlg_lingdan.close()
                         list_refreshable.refresh()
+
                     with ui.row().classes('w-full justify-end gap-2'):
                         ui.button('取消', on_click=dlg_lingdan.close).props('flat')
-                        ui.button('保存并发货', on_click=save_lingdan, color='primary')
+                        ui.button('确认分配', on_click=save_lingdan, color='primary')
                         
                 dlg_qr = ui.dialog()
                 with dlg_qr, ui.card().classes('p-6 items-center'):
@@ -658,6 +712,7 @@ async def shipments_content():
                         {'name': 'shipment_id', 'label': '发货号', 'field': 'shipment_id', 'align': 'left'},
                         {'name': 'ship_type', 'label': '类型', 'field': 'ship_type', 'align': 'center'},
                         {'name': 'status', 'label': '状态', 'field': 'status', 'align': 'center'},
+                        {'name': 'logistics_provider', 'label': '物流', 'field': 'logistics_provider', 'align': 'left'},
                         {'name': 'customer', 'label': '收货人', 'field': 'customer_name', 'align': 'left'},
                         {'name': 'customer_phone', 'label': '收货电话', 'field': 'customer_phone', 'align': 'center'},
                         {'name': 'delivery_address', 'label': '收货地址', 'field': 'delivery_address', 'align': 'left'},
@@ -693,14 +748,16 @@ async def shipments_content():
                                                 ui.notify(f'合单成功: {bid}', type='positive')
                                                 list_refreshable.refresh()
                                                 
-                                            def on_batch_preview():
-                                                execute_batch_preview([row for row in table.selected])
+                                            async def on_batch_preview():
+                                                await display_batch_print_dialog([row for row in table.selected])
                                                 
                                             async def on_batch_export():
                                                 await execute_batch_export([row for row in table.selected])
                                                 
                                             def do_batch_delete():
-                                                batch_del_info.text = f'即将永久删除 {len(table.selected)} 条发货单记录，此操作不可恢复！'
+                                                nonlocal selected_ids_for_delete
+                                                selected_ids_for_delete = [row['shipment_id'] for row in table.selected]
+                                                batch_del_info.text = f'即将永久删除 {len(selected_ids_for_delete)} 条发货单记录，此操作不可恢复！'
                                                 dlg_batch_del.open()
                                                 
                                             ui.button('🔗 零单合单', on_click=do_batch_lingdan).props('outline dense color=secondary')
@@ -715,12 +772,47 @@ async def shipments_content():
                                         with ui.button(icon='link', color='gray').props('flat round dense') as link_btn:
                                             ui.tooltip('司机端链接')
                                         with ui.menu():
-                                            base_url_input = ui.input('司机端访问前缀', value=f"http://{get_local_ip()}:8600").props('dense outlined').classes('w-64 p-2')
+                                            with ui.column().classes('w-72 p-2 gap-2'):
+                                                base_url_input = ui.input('司机端访问前缀', value=(persisted_driver_base_url or default_driver_base_url)).props('dense outlined').classes('w-full')
+
+                                                async def save_driver_base_url():
+                                                    val = (base_url_input.value or '').strip()
+                                                    if not val:
+                                                        ui.notify('司机端访问前缀不能为空', type='warning')
+                                                        return
+                                                    if not (val.startswith('http://') or val.startswith('https://')):
+                                                        ui.notify('链接前缀需以 http:// 或 https:// 开头', type='warning')
+                                                        return
+                                                    await backend_db.set_setting('driver_base_url', val.rstrip('/'))
+                                                    ui.notify('司机端链接前缀已保存', type='positive')
+
+                                                ui.button('保存链接前缀', on_click=save_driver_base_url, color='primary').props('dense')
+
+                                        with ui.button(icon='local_shipping', color='gray').props('flat round dense') as logistics_btn:
+                                            ui.tooltip('物流选项配置')
+                                        with ui.menu():
+                                            with ui.column().classes('w-80 p-2 gap-2'):
+                                                logistics_opt_input = ui.input(
+                                                    '物流选项（逗号分隔）',
+                                                    value=','.join(logistics_options) if logistics_options else default_logistics_options,
+                                                ).props('dense outlined').classes('w-full')
+
+                                                async def save_logistics_options():
+                                                    nonlocal logistics_options
+                                                    parsed = parse_logistics_options(logistics_opt_input.value)
+                                                    if not parsed:
+                                                        ui.notify('请至少保留一个物流选项', type='warning')
+                                                        return
+                                                    logistics_options = parsed
+                                                    await backend_db.set_setting('logistics_provider_options', ','.join(parsed))
+                                                    ui.notify('物流选项已保存', type='positive')
+
+                                                ui.button('保存物流选项', on_click=save_logistics_options, color='primary').props('dense')
 
                                 # 下层：紧凑的筛选表单
                                 with ui.row().classes('w-full items-center gap-3 bg-gray-50 p-2 rounded justify-between'):
                                     with ui.row().classes('items-center gap-3'):
-                                        status_sel = ui.select(['全部', '未订车', '已订车', '已发货', '已作废'], value=filter_status['value'], label='状态').props('dense outlined').classes('w-28')
+                                        status_sel = ui.select(['全部', '待分配物流', '未订车', '已订车', '已发货', '已作废'], value=filter_status['value'], label='状态').props('dense outlined').classes('w-28')
                                         cust_in = ui.input('收货人', value=filter_customer['value']).props('dense outlined').classes('w-32')
                                         phone_in = ui.input('手机号', value=filter_phone['value']).props('dense outlined').classes('w-32')
                                         start_in = ui.input('开始日期', value=filter_start['value']).props('dense outlined').classes('w-32')
@@ -771,7 +863,7 @@ async def shipments_content():
                         table.add_slot('body-cell-status', '''
                             <q-td :props="props">
                                 <q-chip 
-                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\'))" 
+                                    :color="props.row.status === \'已作废\' ? \'grey\' : (props.row.status === \'已发货\' ? \'green\' : (props.row.status === \'待分配物流\' ? \'blue\' : (props.row.status === \'未订车\' ? \'red\' : \'orange\')))" 
                                     text-color="white" dense size="sm">
                                     {{ props.row.status }}
                                 </q-chip>
@@ -787,16 +879,20 @@ async def shipments_content():
                         table.add_slot('body-cell-actions', '''
                             <q-td :props="props">
                                 <template v-if="props.row.status !== \'已作废\'">
-                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                    <q-btn v-if="props.row.status === \'待分配物流\' || props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
                                         dense flat color="blue-7" icon="edit" @click="$parent.$emit('edit_shipment', props.row)" class="mr-1"/>
                                     <q-btn dense flat color="teal-7" icon="list_alt" @click="$parent.$emit('show_detail', props.row)" class="mr-1"/>
+                                    <q-btn v-if="props.row.status === '待分配物流'" 
+                                        dense color="primary" icon="local_shipping" label="分配物流" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'未订车\'" 
                                         dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
                                         dense color="orange" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
+                                    <q-btn v-if="props.row.ship_type === '整车' && props.row.status === '已发货'" 
+                                        dense flat color="teal-7" icon="history" label="查看回执" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
                                         dense color="orange" label="补录快递" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
-                                    <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
+                                    <q-btn v-if="props.row.status === \'待分配物流\' || props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
                                         dense flat color="red-5" icon="delete" @click="$parent.$emit('cancel_shipment', props.row)" class="ml-2"/>
                                     <q-btn v-if="props.row.status === \'已发货\'" 
                                         dense flat color="orange-9" icon="replay" @click="$parent.$emit('rollback_shipment', props.row)" class="ml-2"/>
@@ -811,7 +907,10 @@ async def shipments_content():
                             edit_product.value = row['product_name']
                             edit_qty.value = row['quantity']
                             edit_address.value = row['delivery_address']
-                            edit_mode.value = row['ship_type']
+                            current_edit_ship_type['value'] = row.get('ship_type', '待分配')
+                            edit_logistics_sel.value = row.get('logistics_provider') or None
+                            edit_logistics_input.value = row.get('logistics_provider', '')
+                            edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')}"
                             edit_pickup.value = row.get('pickup_method', '送货上门')
                             edit_payment.value = row.get('payment_method', '现付')
                             edit_unit_price.value = row.get('unit_price', 0)
@@ -836,15 +935,24 @@ async def shipments_content():
                             tk = e.args.get('driver_token', '')
                             if not tk: return
                             try:
-                                url = f"{base_url_input.value.strip('/')}/driver_confirm?id={sid}&token={tk}"
+                                base_url = (base_url_input.value or '').strip()
+                                if not base_url:
+                                    base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+                                if not (base_url.startswith('http://') or base_url.startswith('https://')):
+                                    ui.notify('司机端访问前缀格式错误，请先保存正确链接', type='warning')
+                                    return
+                                url = f"{base_url.rstrip('/')}/driver_confirm?id={sid}&token={tk}"
                                 b64 = generate_qr_base64(url)
                                 qr_img.set_source(b64) 
                             except Exception as ex:
                                 ui.notify(f'凭证生成失败：{ex}', type='negative')
                             dlg_qr.open()
                             
-                        def handle_fill_lingdan(e):
+                        async def handle_fill_lingdan(e):
                             curr_sid.set_text(e.args['shipment_id'])
+                            latest_opts_raw = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
+                            comp_sel.options = parse_logistics_options(latest_opts_raw)
+                            comp_sel.value = None
                             comp_in.value = ''
                             trk_in.value = ''
                             dlg_lingdan.open()

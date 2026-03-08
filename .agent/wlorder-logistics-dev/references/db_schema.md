@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS shipments (
     -- 零单第三方物流信息
     third_party_company  TEXT,               -- 第三方物流公司名
     third_party_tracking TEXT,               -- 运单号
+    logistics_provider  TEXT DEFAULT '',      -- 后置分配的物流公司/承运方式（整车或第三方）
 
     -- 财务核算
     logistics_fee        REAL DEFAULT 0,     -- 对外物流费（客户结算价）
@@ -79,3 +80,11 @@ Shipments(零单): 待填写 ──(文员补录物流)──→ 已发货
 | driver_token | `uuid.uuid4().hex` (32位) | a1b2c3d4e5f6... |
 
 > **注意**: 高并发下时间戳可能重复，生产环境应追加随机后缀或使用 UUID。
+
+
+## 新增业务说明（后置分配物流）
+
+- 新建发货单默认进入 `待分配物流` 状态；不再要求创建时手工选择整车/零单。
+- 文员后置分配物流时自动推导业务模式：
+  - 物流=`整车` → `ship_type=整车`，状态流转为 `已订车`
+  - 物流=第三方公司 → `ship_type=零单`，填写运单号后流转为 `已发货`
