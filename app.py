@@ -88,6 +88,55 @@ def inject_modern_css():
             background-color: #2563EB !important;
             color: white !important;
         }
+        .mode-card {
+            border: 1px solid #DBEAFE;
+            border-radius: 12px;
+            padding: 10px 14px;
+            background: #EFF6FF;
+        }
+        .section-card {
+            border: 1px solid #E5E7EB;
+            border-radius: 12px;
+            background: #FFFFFF;
+            padding: 14px;
+        }
+        .section-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #6B7280;
+            letter-spacing: .03em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .new-shipment-dialog .q-tab {
+            border-radius: 10px;
+            min-height: 36px;
+        }
+        .new-shipment-dialog .q-tab--active {
+            background: #E0ECFF;
+            color: #1E40AF;
+            font-weight: 700;
+        }
+        .upload-pill .q-uploader__header {
+            display: none !important;
+        }
+        .upload-pill .q-uploader__list {
+            display: none !important;
+        }
+        .upload-pill .q-uploader__add-trigger {
+            border-radius: 9999px !important;
+            background: #1677FF !important;
+            color: #fff !important;
+            padding: 8px 18px !important;
+            min-height: 38px;
+            box-shadow: 0 6px 16px rgba(22, 119, 255, 0.25);
+            font-weight: 700;
+            transition: all .2s ease;
+        }
+        .upload-pill .q-uploader__add-trigger:hover {
+            background: #0958D9 !important;
+            transform: translateY(-1px);
+        }
         
         /* 仿真托运单专属 CSS - 强制绕过框架默认样式清除 */
         .printable-batch-container {
@@ -316,7 +365,7 @@ async def shipments_content():
                 
                 # ── 新建发货单入口 ──
                 dlg_new_shipment = ui.dialog()
-                with dlg_new_shipment, ui.card().classes('w-[920px] max-w-[96vw] max-h-[90vh] p-0 overflow-y-auto'):
+                with dlg_new_shipment, ui.card().classes('new-shipment-dialog w-[780px] max-w-[96vw] max-h-[90vh] p-0 overflow-y-auto'):
                     with ui.row().classes('w-full justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100'):
                         with ui.column().classes('gap-0'):
                             ui.label('📝 新建发货单').classes('text-lg font-bold text-gray-800')
@@ -325,18 +374,20 @@ async def shipments_content():
                     
                     imported_products: list[dict] = []
                     
-                    with ui.card().classes('mx-6 mt-4 p-5 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
-                        ui.label('数据录入方式').classes('text-xs font-bold text-gray-500 mb-2')
+                    with ui.card().classes('mx-6 mt-4 p-4 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
+                        ui.label('数据录入方式').classes('section-title')
                         ui.label('推荐：先导入 Excel 自动回填，再快速补全字段').classes('text-xs text-gray-400 mb-3')
-                        mode_tabs = ui.tabs().classes('w-full')
+                        mode_tabs = ui.tabs().classes('w-full bg-white/80 p-1 rounded-xl border border-blue-100')
                         with mode_tabs:
                             manual_tab = ui.tab('✍️ 手工录入')
                             excel_tab = ui.tab('📑 Excel 导入')
-                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-2'):
+                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-3'):
                             with ui.tab_panel(manual_tab).classes('px-0 py-2'):
-                                ui.label('手工模式：适合临时新增，支持快速填单').classes('text-sm text-gray-500')
+                                with ui.row().classes('mode-card items-center w-full'):
+                                    ui.icon('edit_note', color='blue-6').classes('text-xl')
+                                    ui.label('手工模式：适合临时新增，支持快速填单').classes('text-sm text-blue-900 font-medium')
                             with ui.tab_panel(excel_tab).classes('px-0 py-2'):
-                                with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100'):
+                                with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100 gap-2'):
                                     ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
                                     ui.label('从客户订单 Excel 导入并自动回填').classes('text-sm font-bold text-blue-800 flex-1')
 
@@ -370,23 +421,28 @@ async def shipments_content():
                                         except Exception as ex:
                                             ui.notify(f'导入失败：{ex}', type='negative')
 
-                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='上传 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
+                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='新增 Excel').props('accept=".xlsx,.xls" flat color=blue-6').classes('upload-pill')
+                                ui.label('支持 .xlsx / .xls，导入后将自动填充收货人、地址、货品和数量。').classes('text-xs text-blue-700 mt-2')
                     
-                    with ui.column().classes('px-6 pb-4 gap-1'):
-                        customer_input = ui.input('收货人*').classes('w-full mb-2')
-                        phone_input = ui.input('收货电话').classes('w-full mb-2')
-                        product_input = ui.input('货物品类*').classes('w-full mb-2')
-                        qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
-                        address_input = ui.input('收货详细地址*').classes('w-full mb-2')
-                    
-                        ui.separator().classes('my-4')
-                        ui.label('运费配置*').classes('text-xs font-bold text-gray-400 mb-1')
-                        with ui.row().classes('w-full gap-2 mb-2'):
-                            new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
-                            new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
-                        with ui.row().classes('w-full gap-2 mb-2 items-center'):
-                            new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700 flex-1')
-                            ui.label('业务模式将由后续【分配物流】自动判定（整车/零单）').classes('text-xs text-gray-500 flex-1')
+                    with ui.column().classes('px-6 pb-4 gap-3'):
+                        with ui.column().classes('section-card w-full gap-1'):
+                            ui.label('收货信息').classes('section-title')
+                            with ui.row().classes('w-full gap-2'):
+                                customer_input = ui.input('收货人*').classes('flex-1 mb-1')
+                                phone_input = ui.input('收货电话').classes('flex-1 mb-1')
+                            with ui.row().classes('w-full gap-2'):
+                                product_input = ui.input('货物品类*').classes('flex-[2] mb-1')
+                                qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('flex-1 mb-1')
+                            address_input = ui.input('收货详细地址*').classes('w-full mb-1')
+
+                        with ui.column().classes('section-card w-full gap-1 bg-slate-50 border-slate-200'):
+                            ui.label('运费配置').classes('section-title')
+                            with ui.row().classes('w-full gap-2 mb-1'):
+                                new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
+                                new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
+                            with ui.row().classes('w-full items-center justify-between gap-2 p-2 rounded-lg bg-white border border-blue-100'):
+                                new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700')
+                                ui.label('业务模式将在后续【分配物流】自动判定（整车/零单）').classes('text-xs text-gray-500 text-right')
                     
                     async def submit_shipment():
                         if not customer_input.value or not product_input.value or not address_input.value:
