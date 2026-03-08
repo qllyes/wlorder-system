@@ -316,7 +316,7 @@ async def shipments_content():
                 
                 # ── 新建发货单入口 ──
                 dlg_new_shipment = ui.dialog()
-                with dlg_new_shipment, ui.card().classes('min-w-[720px] p-0 overflow-hidden'):
+                with dlg_new_shipment, ui.card().classes('w-[920px] max-w-[96vw] max-h-[90vh] p-0 overflow-y-auto'):
                     with ui.row().classes('w-full justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100'):
                         with ui.column().classes('gap-0'):
                             ui.label('📝 新建发货单').classes('text-lg font-bold text-gray-800')
@@ -325,7 +325,7 @@ async def shipments_content():
                     
                     imported_products: list[dict] = []
                     
-                    with ui.card().classes('mx-6 mt-4 p-4 bg-gray-50 border border-gray-200 shadow-none'):
+                    with ui.card().classes('mx-6 mt-4 p-5 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
                         ui.label('数据录入方式').classes('text-xs font-bold text-gray-500 mb-2')
                         ui.label('推荐：先导入 Excel 自动回填，再快速补全字段').classes('text-xs text-gray-400 mb-3')
                         mode_tabs = ui.tabs().classes('w-full')
@@ -372,7 +372,7 @@ async def shipments_content():
 
                                     ui.upload(on_upload=on_excel_upload, auto_upload=True, label='上传 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
                     
-                    with ui.column().classes('px-6 pb-6'):
+                    with ui.column().classes('px-6 pb-4 gap-1'):
                         customer_input = ui.input('收货人*').classes('w-full mb-2')
                         phone_input = ui.input('收货电话').classes('w-full mb-2')
                         product_input = ui.input('货物品类*').classes('w-full mb-2')
@@ -430,7 +430,7 @@ async def shipments_content():
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
-                    with ui.row().classes('sticky bottom-0 z-10 w-full justify-end gap-2 mt-6 px-6 py-3 bg-white border-t border-gray-200'):
+                    with ui.row().classes('w-full justify-end gap-2 mt-6 px-6 py-4 bg-white border-t border-gray-100'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
                 
@@ -464,6 +464,7 @@ async def shipments_content():
                 curr_sid = ui.label().classes('hidden')
 
                 curr_sid = ui.label().classes('hidden')
+                current_edit_ship_type = {'value': '待分配'}
                 
                 # ── 弹窗：编辑发货单 ──
                 dlg_edit = ui.dialog()
@@ -487,9 +488,10 @@ async def shipments_content():
                         edit_delivery = ui.number('运送费(元)', value=0, min=0, format='%.2f').classes('flex-1')
                         
                     ui.separator().classes('my-4')
-                    ui.label('业务模式').classes('text-xs font-bold text-gray-400 mb-1')
-                    edit_mode = ui.radio(['整车', '零单'], value='整车').props('inline')
-                    ui.label('如果更改了业务模式，将会清理绑定的物流并重置回未订车状态。').classes('text-[10px] text-orange-500 mb-4')
+                    ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
+                    edit_logistics_sel = ui.select(logistics_options, label='选择已配置物流').classes('w-full mb-2')
+                    edit_logistics_input = ui.input('或手动填写物流名称').classes('w-full mb-1')
+                    edit_mode_hint = ui.label('当前业务模式：待分配').classes('text-[11px] text-blue-600 mb-4')
                     
                     async def save_edit():
                         if not edit_customer.value or not edit_product.value or not edit_address.value:
@@ -504,13 +506,18 @@ async def shipments_content():
                         df = float(edit_delivery.value or 0)
                         freight_fee = round(total_weight_t * up + df, 2)
                         
+                        provider = (edit_logistics_input.value or edit_logistics_sel.value or '').strip()
+                        inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
+
                         await backend_db.update_shipment_info(
                             curr_sid.text, edit_customer.value, edit_product.value, 
-                            int(edit_qty.value), edit_address.value, edit_mode.value,
+                            int(edit_qty.value), edit_address.value, inferred_mode,
                             edit_pickup.value, edit_payment.value,
                             total_weight=total_weight_t, unit_price=up,
                             delivery_fee=df, freight_fee=freight_fee,
                         )
+                        if provider:
+                            await backend_db.set_shipment_logistics_provider(curr_sid.text, provider)
                         ui.notify(f'修改已保存 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         dlg_edit.close()
                         list_refreshable.refresh()
@@ -900,7 +907,10 @@ async def shipments_content():
                             edit_product.value = row['product_name']
                             edit_qty.value = row['quantity']
                             edit_address.value = row['delivery_address']
-                            edit_mode.value = row['ship_type']
+                            current_edit_ship_type['value'] = row.get('ship_type', '待分配')
+                            edit_logistics_sel.value = row.get('logistics_provider') or None
+                            edit_logistics_input.value = row.get('logistics_provider', '')
+                            edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')}"
                             edit_pickup.value = row.get('pickup_method', '送货上门')
                             edit_payment.value = row.get('payment_method', '现付')
                             edit_unit_price.value = row.get('unit_price', 0)

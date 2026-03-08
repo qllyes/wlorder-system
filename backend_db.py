@@ -390,6 +390,16 @@ async def assign_logistics(
         await conn.commit()
 
 
+async def set_shipment_logistics_provider(shipment_id: str, logistics_provider: str) -> None:
+    """仅更新发货单物流公司字段（不改状态机）。"""
+    async with get_conn() as conn:
+        await conn.execute(
+            "UPDATE shipments SET logistics_provider=? WHERE shipment_id=?",
+            ((logistics_provider or '').strip(), shipment_id),
+        )
+        await conn.commit()
+
+
 # ── 零单合单 ──
 
 async def batch_lingdan(shipment_ids: list[str]) -> str:
