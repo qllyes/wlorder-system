@@ -547,71 +547,25 @@ async def shipments_content():
                 smart_logistics_selectors = []
 
                 def create_smart_logistics_selector() -> dict:
-                    state = {'input_mode': False}
-                    with ui.row().classes('w-full items-start gap-1 mb-2'):
-                        select_el = ui.select(logistics_options, label='物流选项*').props('use-input fill-input').classes('flex-1')
-                        input_el = ui.input('输入新物流*').classes('flex-1 hidden')
-                        toggle_btn = ui.button(icon='add_circle').props('flat round dense color=primary')
-                        with toggle_btn:
-                            toggle_tip = ui.tooltip('切换到新增物流输入')
-
-                    mode_hint = ui.label('当前：历史物流选择').classes('text-[11px] text-gray-400 -mt-1 mb-2')
-
-                    def update_toggle_ux(is_input_mode: bool):
-                        if is_input_mode:
-                            toggle_btn.props('icon=format_list_bulleted color=secondary')
-                            toggle_tip.text = '切回历史物流列表'
-                            mode_hint.text = '当前：新增物流输入'
-                        else:
-                            toggle_btn.props('icon=add_circle color=primary')
-                            toggle_tip.text = '切换到新增物流输入'
-                            mode_hint.text = '当前：历史物流选择'
-                        toggle_btn.update()
-                        mode_hint.update()
-
-                    def set_input_mode(is_input_mode: bool):
-                        state['input_mode'] = is_input_mode
-                        if is_input_mode:
-                            select_el.classes(add='hidden')
-                            input_el.classes(remove='hidden')
-                        else:
-                            input_el.classes(add='hidden')
-                            select_el.classes(remove='hidden')
-                        update_toggle_ux(is_input_mode)
-
-                    def toggle_mode():
-                        set_input_mode(not state['input_mode'])
+                    with ui.column().classes('w-full mb-2 gap-1'):
+                        select_el = ui.select(logistics_options, label='物流选项*').props('use-input fill-input hide-selected input-debounce=0 new-value-mode=add-unique').classes('w-full')
+                        ui.label('输入后若不存在将自动新增并完成分配').classes('text-[11px] text-gray-400')
 
                     def set_value(value: str):
-                        provider = (value or '').strip()
-                        if provider and provider not in logistics_options:
-                            input_el.value = provider
-                            select_el.value = None
-                            set_input_mode(True)
-                            return
-                        input_el.value = ''
-                        select_el.value = provider or None
-                        set_input_mode(False)
+                        select_el.value = (value or '').strip() or None
 
                     def get_value() -> str:
-                        manual_value = (input_el.value or '').strip()
-                        selected_value = (select_el.value or '').strip()
-                        return manual_value or selected_value
+                        return (select_el.value or '').strip()
 
                     def refresh_options():
                         select_el.options = logistics_options
+                        select_el.update()
 
                     def set_editable(can_edit: bool):
                         if can_edit:
                             select_el.enable()
-                            input_el.enable()
-                            toggle_btn.enable()
                         else:
                             select_el.disable()
-                            input_el.disable()
-                            toggle_btn.disable()
-
-                    toggle_btn.on_click(toggle_mode)
 
                     selector = {
                         'set_value': set_value,
