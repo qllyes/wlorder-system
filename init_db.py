@@ -102,6 +102,15 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         pass  # 列已存在，忽略
 
+    # ── 系统配置表（键值存储） ──
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key         TEXT PRIMARY KEY,
+        value       TEXT,
+        updated_at  DATETIME DEFAULT (datetime('now','localtime'))
+    )
+    """)
+
     # ── 规格单重配置表 ──
     cur.execute("""
     CREATE TABLE IF NOT EXISTS spec_weights (
