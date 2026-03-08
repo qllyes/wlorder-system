@@ -430,7 +430,7 @@ async def shipments_content():
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
-                    with ui.row().classes('w-full justify-end gap-2 mt-6'):
+                    with ui.row().classes('sticky bottom-0 z-10 w-full justify-end gap-2 mt-6 px-6 py-3 bg-white border-t border-gray-200'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
                 
@@ -705,6 +705,7 @@ async def shipments_content():
                         {'name': 'shipment_id', 'label': '发货号', 'field': 'shipment_id', 'align': 'left'},
                         {'name': 'ship_type', 'label': '类型', 'field': 'ship_type', 'align': 'center'},
                         {'name': 'status', 'label': '状态', 'field': 'status', 'align': 'center'},
+                        {'name': 'logistics_provider', 'label': '物流', 'field': 'logistics_provider', 'align': 'left'},
                         {'name': 'customer', 'label': '收货人', 'field': 'customer_name', 'align': 'left'},
                         {'name': 'customer_phone', 'label': '收货电话', 'field': 'customer_phone', 'align': 'center'},
                         {'name': 'delivery_address', 'label': '收货地址', 'field': 'delivery_address', 'align': 'left'},
