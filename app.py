@@ -303,76 +303,77 @@ async def shipments_content():
                 
                 # ── 新建发货单入口 ──
                 dlg_new_shipment = ui.dialog()
-                with dlg_new_shipment, ui.card().classes('min-w-[540px] p-6'):
-                    with ui.row().classes('w-full justify-between items-center mb-4'):
-                        ui.label('📝 新建发货单').classes('text-lg font-bold')
+                with dlg_new_shipment, ui.card().classes('min-w-[720px] p-0 overflow-hidden'):
+                    with ui.row().classes('w-full justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100'):
+                        with ui.column().classes('gap-0'):
+                            ui.label('📝 新建发货单').classes('text-lg font-bold text-gray-800')
+                            ui.label('支持手工录入与 Excel 一键回填').classes('text-xs text-gray-500')
                         ui.button(icon='close', on_click=dlg_new_shipment.close).props('flat round dense')
                     
                     imported_products: list[dict] = []
                     
-                    ui.label('数据录入方式').classes('text-xs font-bold text-gray-400 mb-1')
-                    mode_tabs = ui.radio(['✍️ 手工填写', '📑 Excel 导入'], value='✍️ 手工填写').props('inline').classes('mb-2')
+                    with ui.card().classes('mx-6 mt-4 p-4 bg-gray-50 border border-gray-200 shadow-none'):
+                        ui.label('数据录入方式').classes('text-xs font-bold text-gray-500 mb-2')
+                        ui.label('推荐：先导入 Excel 自动回填，再快速补全字段').classes('text-xs text-gray-400 mb-3')
+                        mode_tabs = ui.tabs().classes('w-full')
+                        with mode_tabs:
+                            manual_tab = ui.tab('✍️ 手工录入')
+                            excel_tab = ui.tab('📑 Excel 导入')
+                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-2'):
+                            with ui.tab_panel(manual_tab).classes('px-0 py-2'):
+                                ui.label('手工模式：适合临时新增，支持快速填单').classes('text-sm text-gray-500')
+                            with ui.tab_panel(excel_tab).classes('px-0 py-2'):
+                                with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100'):
+                                    ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
+                                    ui.label('从客户订单 Excel 导入并自动回填').classes('text-sm font-bold text-blue-800 flex-1')
+
+                                    async def on_excel_upload(e):
+                                        try:
+                                            import tempfile, os, asyncio
+                                            filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
+                                            suffix = Path(filename).suffix or '.xlsx'
+                                            content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
+                                            if content_io is None: return
+                                            raw = content_io.read()
+                                            if asyncio.iscoroutine(raw): raw = await raw
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                                                tmp.write(raw)
+                                                tmp_path = tmp.name
+
+                                            data = waybill_generator.parse_order_excel(tmp_path)
+                                            os.unlink(tmp_path)
+
+                                            customer_input.value = data['receiver_name']
+                                            phone_input.value = data['receiver_phone']
+                                            address_input.value = data['receiver_address']
+
+                                            prods = data.get('products', [])
+                                            if prods:
+                                                product_input.value = '、'.join([p['name'] for p in prods[:3]])
+                                                qty_input.value = sum(p['qty'] for p in prods)
+                                            imported_products.clear()
+                                            imported_products.extend(prods)
+                                            ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品', type='positive')
+                                        except Exception as ex:
+                                            ui.notify(f'导入失败：{ex}', type='negative')
+
+                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='上传 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
                     
-                    upload_container = ui.row().classes('w-full items-center mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100 hidden')
-                    with upload_container:
-                        ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
-                        ui.label('从客户订单Excel导入').classes('text-sm font-bold text-blue-800 flex-1')
-                        
-                        async def on_excel_upload(e):
-                            try:
-                                import tempfile, os, asyncio
-                                filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
-                                suffix = Path(filename).suffix or '.xlsx'
-                                content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
-                                if content_io is None: return
-                                raw = content_io.read()
-                                if asyncio.iscoroutine(raw): raw = await raw
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                                    tmp.write(raw)
-                                    tmp_path = tmp.name
-                                
-                                data = waybill_generator.parse_order_excel(tmp_path)
-                                os.unlink(tmp_path)
-                                
-                                customer_input.value = data['receiver_name']
-                                phone_input.value = data['receiver_phone']
-                                address_input.value = data['receiver_address']
-                                
-                                prods = data.get('products', [])
-                                if prods:
-                                    product_input.value = '、'.join([p['name'] for p in prods[:3]])
-                                    qty_input.value = sum(p['qty'] for p in prods)
-                                imported_products.clear()
-                                imported_products.extend(prods)
-                                ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品', type='positive')
-                            except Exception as ex:
-                                ui.notify(f'导入失败：{ex}', type='negative')
-                        
-                        ui.upload(on_upload=on_excel_upload, auto_upload=True, label='选择 Excel').props('accept=".xlsx,.xls" dense flat color=blue-5')
-                        
-                    def on_tab_change(e):
-                        if e.value == '📑 Excel 导入':
-                            upload_container.classes(remove='hidden')
-                        else:
-                            upload_container.classes(add='hidden')
-                    mode_tabs.on_value_change(on_tab_change)
+                    with ui.column().classes('px-6 pb-6'):
+                        customer_input = ui.input('收货人*').classes('w-full mb-2')
+                        phone_input = ui.input('收货电话').classes('w-full mb-2')
+                        product_input = ui.input('货物品类*').classes('w-full mb-2')
+                        qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
+                        address_input = ui.input('收货详细地址*').classes('w-full mb-2')
                     
-                    ui.separator().classes('my-2')
-                    
-                    customer_input = ui.input('收货人*').classes('w-full mb-2')
-                    phone_input = ui.input('收货电话').classes('w-full mb-2')
-                    product_input = ui.input('货物品类*').classes('w-full mb-2')
-                    qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('w-full mb-2')
-                    address_input = ui.input('收货详细地址*').classes('w-full mb-2')
-                    
-                    ui.separator().classes('my-4')
-                    ui.label('运费配置*').classes('text-xs font-bold text-gray-400 mb-1')
-                    with ui.row().classes('w-full gap-2 mb-2'):
-                        new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
-                        new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
-                    with ui.row().classes('w-full gap-2 mb-2 items-center'):
-                        new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700 flex-1')
-                        mode_choice = ui.radio(['整车', '零单'], value='整车').props('inline').classes('flex-1')
+                        ui.separator().classes('my-4')
+                        ui.label('运费配置*').classes('text-xs font-bold text-gray-400 mb-1')
+                        with ui.row().classes('w-full gap-2 mb-2'):
+                            new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
+                            new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
+                        with ui.row().classes('w-full gap-2 mb-2 items-center'):
+                            new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700 flex-1')
+                            mode_choice = ui.radio(['整车', '零单'], value='整车').props('inline').classes('flex-1')
                     
                     async def submit_shipment():
                         if not customer_input.value or not product_input.value or not address_input.value:
@@ -416,7 +417,7 @@ async def shipments_content():
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
-                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                    with ui.row().classes('w-full justify-end gap-2 mt-6'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
                 
@@ -501,7 +502,7 @@ async def shipments_content():
                         dlg_edit.close()
                         list_refreshable.refresh()
                         
-                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                    with ui.row().classes('w-full justify-end gap-2 mt-6'):
                         ui.button('取消', on_click=dlg_edit.close).props('outline text-gray-600 border-gray-300')
                         ui.button('保存修改', on_click=save_edit, color='primary')
                 
@@ -827,6 +828,8 @@ async def shipments_content():
                                         dense outline color="primary" label="改为已订车" @click="$parent.$emit('mark_booked', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'整车\' && props.row.status === \'已订车\'" 
                                         dense color="orange" icon="qr_code" label="发车码" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
+                                    <q-btn v-if="props.row.ship_type === '整车' && props.row.status === '已发货'" 
+                                        dense flat color="teal-7" icon="history" label="查看回执" @click="$parent.$emit('show_qr', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.ship_type === \'零单\' && props.row.status === \'未订车\'" 
                                         dense color="orange" label="补录快递" @click="$parent.$emit('fill_lingdan', props.row)" class="mr-1" />
                                     <q-btn v-if="props.row.status === \'未订车\' || props.row.status === \'已订车\'" 
