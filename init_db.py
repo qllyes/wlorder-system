@@ -77,6 +77,7 @@ def init_db() -> None:
         ("actual_unit_price",   "REAL DEFAULT 0"),
         ("actual_delivery_fee", "REAL DEFAULT 0"),
         ("customer_phone",      "TEXT DEFAULT ''"),   # 收货人电话
+        ("logistics_provider",  "TEXT DEFAULT ''"),   # 后置分配物流公司/承运方式
     ]
     for col_name, col_def in _add_columns:
         try:
@@ -101,6 +102,15 @@ def init_db() -> None:
         cur.execute("ALTER TABLE shipment_products ADD COLUMN raw_data TEXT DEFAULT '{}'")
     except sqlite3.OperationalError:
         pass  # 列已存在，忽略
+
+    # ── 系统配置表（键值存储） ──
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key         TEXT PRIMARY KEY,
+        value       TEXT,
+        updated_at  DATETIME DEFAULT (datetime('now','localtime'))
+    )
+    """)
 
     # ── 规格单重配置表 ──
     cur.execute("""

@@ -76,3 +76,14 @@ async def get_dashboard_stats(date: str | None = None) -> dict:
     """返回指定日期（默认今天）的汇总统计。"""
     # 返回: { today_orders, pending_count, shipped_count, shipments_detail }
 ```
+
+
+### `assign_logistics(shipment_id: str, logistics_provider: str, tracking: str = '') -> None`
+后置分配物流并自动判定业务模式：
+- `logistics_provider == '整车'`：自动置 `ship_type='整车'`、`status='已订车'`，并生成/保留 `driver_token`
+- 其他物流公司：自动置 `ship_type='零单'`，`tracking` 选填并直接置 `status='已发货'`
+- 自动维护 `logistics_provider`、`third_party_company`、`third_party_tracking` 与互斥字段清理
+
+
+### `set_shipment_logistics_provider(shipment_id: str, logistics_provider: str) -> None`
+仅更新 `shipments.logistics_provider` 字段，不触发状态流转（用于编辑场景的展示信息维护）。
