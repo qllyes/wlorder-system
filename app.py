@@ -462,9 +462,74 @@ async def shipments_content():
                 confirm_btn.on_click(confirm_batch_delete)
 
                 curr_sid = ui.label().classes('hidden')
-
-                curr_sid = ui.label().classes('hidden')
                 current_edit_ship_type = {'value': '待分配'}
+
+                smart_logistics_selectors = []
+
+                def create_smart_logistics_selector() -> dict:
+                    state = {'input_mode': False}
+                    with ui.row().classes('w-full items-start gap-1 mb-2'):
+                        select_el = ui.select(logistics_options, label='物流选项*').props('use-input fill-input').classes('flex-1')
+                        input_el = ui.input('输入新物流*').classes('flex-1 hidden')
+                        toggle_btn = ui.button(icon='add').props('flat round dense color=primary')
+                        ui.tooltip('新增物流')
+
+                    def set_input_mode(is_input_mode: bool):
+                        state['input_mode'] = is_input_mode
+                        if is_input_mode:
+                            select_el.classes(add='hidden')
+                            input_el.classes(remove='hidden')
+                            toggle_btn.props('icon=history')
+                            toggle_btn.update()
+                        else:
+                            input_el.classes(add='hidden')
+                            select_el.classes(remove='hidden')
+                            toggle_btn.props('icon=add')
+                            toggle_btn.update()
+
+                    def toggle_mode():
+                        set_input_mode(not state['input_mode'])
+
+                    def set_value(value: str):
+                        provider = (value or '').strip()
+                        if provider and provider not in logistics_options:
+                            input_el.value = provider
+                            select_el.value = None
+                            set_input_mode(True)
+                            return
+                        input_el.value = ''
+                        select_el.value = provider or None
+                        set_input_mode(False)
+
+                    def get_value() -> str:
+                        manual_value = (input_el.value or '').strip()
+                        selected_value = (select_el.value or '').strip()
+                        return manual_value or selected_value
+
+                    def refresh_options():
+                        select_el.options = logistics_options
+
+                    toggle_btn.on_click(toggle_mode)
+
+                    selector = {
+                        'set_value': set_value,
+                        'get_value': get_value,
+                        'refresh_options': refresh_options,
+                    }
+                    smart_logistics_selectors.append(selector)
+                    return selector
+
+                def refresh_all_logistics_selectors():
+                    for selector in smart_logistics_selectors:
+                        selector['refresh_options']()
+
+                async def ensure_logistics_option(provider: str):
+                    normalized_provider = (provider or '').strip()
+                    if not normalized_provider or normalized_provider in logistics_options:
+                        return
+                    logistics_options.append(normalized_provider)
+                    refresh_all_logistics_selectors()
+                    await backend_db.set_setting('logistics_provider_options', ','.join(logistics_options))
                 
                 # ── 弹窗：编辑发货单 ──
                 dlg_edit = ui.dialog()
@@ -489,7 +554,7 @@ async def shipments_content():
                         
                     ui.separator().classes('my-4')
                     ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
-                    edit_logistics = ui.select(logistics_options, label='物流选项*').props('use-input fill-input new-value-mode=add').classes('w-full mb-1')
+                    edit_selector = create_smart_logistics_selector()
                     edit_mode_hint = ui.label('当前业务模式：待分配').classes('text-[11px] text-blue-600 mb-4')
                     
                     async def save_edit():
@@ -505,7 +570,7 @@ async def shipments_content():
                         df = float(edit_delivery.value or 0)
                         freight_fee = round(total_weight_t * up + df, 2)
                         
-                        provider = (edit_logistics.value or '').strip()
+                        provider = edit_selector['get_value']()
                         inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
 
                         await backend_db.update_shipment_info(
@@ -516,6 +581,7 @@ async def shipments_content():
                             delivery_fee=df, freight_fee=freight_fee,
                         )
                         if provider:
+                            await ensure_logistics_option(provider)
                             await backend_db.set_shipment_logistics_provider(curr_sid.text, provider)
                         ui.notify(f'修改已保存 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         dlg_edit.close()
@@ -533,22 +599,24 @@ async def shipments_content():
                     ui.label('分配物流并自动判定业务模式').classes('font-bold text-lg mb-1')
                     ui.label('可搜索、可选择、可直接输入新物流').classes('text-xs text-gray-500 mb-4')
 
-                    comp_choice = ui.select(logistics_options, label='物流选项*').props('use-input fill-input new-value-mode=add').classes('w-full mb-2')
+                    lingdan_selector = create_smart_logistics_selector()
                     trk_in = ui.input('运单号（选填）').classes('w-full mb-1')
                     ui.label('规则：物流=整车 → 业务模式整车；其他物流公司 → 业务模式零单').classes('text-[11px] text-blue-600 mb-3')
 
                     async def save_lingdan():
-                        provider = (comp_choice.value or '').strip()
+                        provider = lingdan_selector['get_value']()
                         tracking_no = (trk_in.value or '').strip()
                         if not provider:
                             ui.notify('请填写或选择物流公司', type='warning')
                             return
+                        await ensure_logistics_option(provider)
                         await backend_db.assign_logistics(curr_sid.text, provider, tracking_no)
                         if provider == '整车':
                             ui.notify('已分配为整车，状态更新为已订车', type='positive')
                         else:
                             ui.notify('已分配第三方物流并完成发货', type='positive')
                         dlg_lingdan.close()
+                        lingdan_selector['set_value']('')
                         list_refreshable.refresh()
 
                     with ui.row().classes('w-full justify-end gap-2'):
@@ -903,7 +971,7 @@ async def shipments_content():
                             edit_qty.value = row['quantity']
                             edit_address.value = row['delivery_address']
                             current_edit_ship_type['value'] = row.get('ship_type', '待分配')
-                            edit_logistics.value = row.get('logistics_provider') or None
+                            edit_selector['set_value'](row.get('logistics_provider') or '')
                             edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')}"
                             edit_pickup.value = row.get('pickup_method', '送货上门')
                             edit_payment.value = row.get('payment_method', '现付')
@@ -945,8 +1013,11 @@ async def shipments_content():
                         async def handle_fill_lingdan(e):
                             curr_sid.set_text(e.args['shipment_id'])
                             latest_opts_raw = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
-                            comp_choice.options = parse_logistics_options(latest_opts_raw)
-                            comp_choice.value = None
+                            latest_options = parse_logistics_options(latest_opts_raw)
+                            logistics_options.clear()
+                            logistics_options.extend(latest_options)
+                            refresh_all_logistics_selectors()
+                            lingdan_selector['set_value']('')
                             trk_in.value = ''
                             dlg_lingdan.open()
 
