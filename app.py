@@ -108,28 +108,50 @@ def inject_modern_css():
             text-transform: uppercase;
             margin-bottom: 8px;
         }
-        .new-shipment-dialog .q-tab {
-            border-radius: 10px;
-            min-height: 36px;
+        .new-shipment-dialog .mode-switch {
+            width: fit-content;
+            margin: 0 auto;
+            padding: 4px;
+            border-radius: 9999px;
+            border: 1px solid #BFDBFE;
+            background: #FFFFFF;
         }
-        .new-shipment-dialog .q-tab--active {
+        .new-shipment-dialog .mode-switch .q-tab {
+            border-radius: 9999px;
+            min-height: 34px;
+            padding: 0 16px;
+            font-weight: 600;
+        }
+        .new-shipment-dialog .mode-switch .q-tab--active {
             background: #E0ECFF;
             color: #1E40AF;
             font-weight: 700;
         }
-        .upload-pill .q-uploader__header {
-            display: none !important;
+        .fixed-mode-panels {
+            min-height: 112px;
+            max-height: 112px;
+            overflow: hidden;
         }
-        .upload-pill .q-uploader__list {
-            display: none !important;
+        .upload-pill {
+            width: 100%;
+        }
+        .upload-pill .q-uploader {
+            border: 1px dashed #93C5FD !important;
+            border-radius: 12px !important;
+            background: #EFF6FF;
+        }
+        .upload-pill .q-uploader__header {
+            background: transparent !important;
+            padding: 10px !important;
+            border-bottom: none !important;
         }
         .upload-pill .q-uploader__add-trigger {
             border-radius: 9999px !important;
             background: #1677FF !important;
             color: #fff !important;
             padding: 8px 18px !important;
-            min-height: 38px;
-            box-shadow: 0 6px 16px rgba(22, 119, 255, 0.25);
+            min-height: 36px;
+            box-shadow: 0 6px 16px rgba(22, 119, 255, 0.22);
             font-weight: 700;
             transition: all .2s ease;
         }
@@ -377,16 +399,16 @@ async def shipments_content():
                     with ui.card().classes('mx-6 mt-4 p-4 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
                         ui.label('数据录入方式').classes('section-title')
                         ui.label('推荐：先导入 Excel 自动回填，再快速补全字段').classes('text-xs text-gray-400 mb-3')
-                        mode_tabs = ui.tabs().classes('w-full bg-white/80 p-1 rounded-xl border border-blue-100')
+                        mode_tabs = ui.tabs().classes('mode-switch')
                         with mode_tabs:
                             manual_tab = ui.tab('✍️ 手工录入')
                             excel_tab = ui.tab('📑 Excel 导入')
-                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-3'):
-                            with ui.tab_panel(manual_tab).classes('px-0 py-2'):
+                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-3 fixed-mode-panels'):
+                            with ui.tab_panel(manual_tab).classes('px-0 py-2 h-full'):
                                 with ui.row().classes('mode-card items-center w-full'):
                                     ui.icon('edit_note', color='blue-6').classes('text-xl')
                                     ui.label('手工模式：适合临时新增，支持快速填单').classes('text-sm text-blue-900 font-medium')
-                            with ui.tab_panel(excel_tab).classes('px-0 py-2'):
+                            with ui.tab_panel(excel_tab).classes('px-0 py-2 h-full'):
                                 with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100 gap-2'):
                                     ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
                                     ui.label('从客户订单 Excel 导入并自动回填').classes('text-sm font-bold text-blue-800 flex-1')
@@ -421,7 +443,7 @@ async def shipments_content():
                                         except Exception as ex:
                                             ui.notify(f'导入失败：{ex}', type='negative')
 
-                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='新增 Excel').props('accept=".xlsx,.xls" flat color=blue-6').classes('upload-pill')
+                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='新增 Excel').props('accept=".xlsx,.xls" color=blue-6 bordered').classes('upload-pill max-w-[360px]')
                                 ui.label('支持 .xlsx / .xls，导入后将自动填充收货人、地址、货品和数量。').classes('text-xs text-blue-700 mt-2')
                     
                     with ui.column().classes('px-6 pb-4 gap-3'):
@@ -486,7 +508,7 @@ async def shipments_content():
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
-                    with ui.row().classes('w-full justify-end gap-2 mt-6 px-6 py-4 bg-white border-t border-gray-100'):
+                    with ui.row().classes('w-full justify-center items-center gap-3 mt-6 px-6 py-4 bg-white border-t border-gray-100'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
                 
