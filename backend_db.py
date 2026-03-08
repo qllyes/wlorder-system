@@ -572,3 +572,33 @@ async def delete_spec_weight(spec: str) -> None:
             "DELETE FROM spec_weights WHERE spec = ?", (spec.strip(),)
         )
         await conn.commit()
+
+
+# ════════════════════════════════════════════════
+#  系统配置
+# ════════════════════════════════════════════════
+
+async def get_setting(key: str, default: str = '') -> str:
+    """读取系统配置键值；不存在时返回 default。"""
+    async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return default
+            return row["value"] if row["value"] is not None else default
+
+
+async def set_setting(key: str, value: str) -> None:
+    """写入系统配置键值（UPSERT）。"""
+    async with get_conn() as conn:
+        await conn.execute(
+            """INSERT INTO settings (key, value, updated_at)
+               VALUES (?, ?, datetime('now','localtime'))
+               ON CONFLICT(key) DO UPDATE SET
+                   value=excluded.value,
+                   updated_at=datetime('now','localtime')""",
+            (key, value),
+        )
+        await conn.commit()

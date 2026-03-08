@@ -294,6 +294,9 @@ _page_ctx: dict = {}
 async def shipments_content():
     @ui.refreshable
     async def main_shipments_refreshable():
+        default_driver_base_url = f"http://{get_local_ip()}:8600"
+        persisted_driver_base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+
         with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-6'):
             with ui.row().classes('w-full justify-between items-center'):
                 ui.label('发货单调度与管理').classes('text-2xl font-bold tracking-tight text-gray-800')
@@ -731,7 +734,21 @@ async def shipments_content():
                                         with ui.button(icon='link', color='gray').props('flat round dense') as link_btn:
                                             ui.tooltip('司机端链接')
                                         with ui.menu():
-                                            base_url_input = ui.input('司机端访问前缀', value=f"http://{get_local_ip()}:8600").props('dense outlined').classes('w-64 p-2')
+                                            with ui.column().classes('w-72 p-2 gap-2'):
+                                                base_url_input = ui.input('司机端访问前缀', value=(persisted_driver_base_url or default_driver_base_url)).props('dense outlined').classes('w-full')
+
+                                                async def save_driver_base_url():
+                                                    val = (base_url_input.value or '').strip()
+                                                    if not val:
+                                                        ui.notify('司机端访问前缀不能为空', type='warning')
+                                                        return
+                                                    if not (val.startswith('http://') or val.startswith('https://')):
+                                                        ui.notify('链接前缀需以 http:// 或 https:// 开头', type='warning')
+                                                        return
+                                                    await backend_db.set_setting('driver_base_url', val.rstrip('/'))
+                                                    ui.notify('司机端链接前缀已保存', type='positive')
+
+                                                ui.button('保存链接前缀', on_click=save_driver_base_url, color='primary').props('dense')
 
                                 # 下层：紧凑的筛选表单
                                 with ui.row().classes('w-full items-center gap-3 bg-gray-50 p-2 rounded justify-between'):
@@ -852,7 +869,13 @@ async def shipments_content():
                             tk = e.args.get('driver_token', '')
                             if not tk: return
                             try:
-                                url = f"{base_url_input.value.strip('/')}/driver_confirm?id={sid}&token={tk}"
+                                base_url = (base_url_input.value or '').strip()
+                                if not base_url:
+                                    base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+                                if not (base_url.startswith('http://') or base_url.startswith('https://')):
+                                    ui.notify('司机端访问前缀格式错误，请先保存正确链接', type='warning')
+                                    return
+                                url = f"{base_url.rstrip('/')}/driver_confirm?id={sid}&token={tk}"
                                 b64 = generate_qr_base64(url)
                                 qr_img.set_source(b64) 
                             except Exception as ex:
