@@ -342,7 +342,7 @@ async def assign_logistics(
 
     规则：
     - 物流=整车 -> ship_type=整车, status=已订车, 生成/保留 driver_token
-    - 物流!=整车 -> ship_type=零单, status=已发货(需运单号)
+    - 物流!=整车 -> ship_type=零单, status=已发货(运单号选填)
     """
     provider = (logistics_provider or '').strip()
     track = (tracking or '').strip()
@@ -371,8 +371,6 @@ async def assign_logistics(
                 (provider, token, shipment_id),
             )
         else:
-            if not track:
-                return
             await conn.execute(
                 """UPDATE shipments
                    SET logistics_provider=?,

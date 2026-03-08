@@ -489,8 +489,7 @@ async def shipments_content():
                         
                     ui.separator().classes('my-4')
                     ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
-                    edit_logistics_sel = ui.select(logistics_options, label='选择已配置物流').classes('w-full mb-2')
-                    edit_logistics_input = ui.input('或手动填写物流名称').classes('w-full mb-1')
+                    edit_logistics = ui.select(logistics_options, label='物流选项*').props('use-input fill-input new-value-mode=add').classes('w-full mb-1')
                     edit_mode_hint = ui.label('当前业务模式：待分配').classes('text-[11px] text-blue-600 mb-4')
                     
                     async def save_edit():
@@ -506,7 +505,7 @@ async def shipments_content():
                         df = float(edit_delivery.value or 0)
                         freight_fee = round(total_weight_t * up + df, 2)
                         
-                        provider = (edit_logistics_input.value or edit_logistics_sel.value or '').strip()
+                        provider = (edit_logistics.value or '').strip()
                         inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
 
                         await backend_db.update_shipment_info(
@@ -532,21 +531,17 @@ async def shipments_content():
                 dlg_lingdan = ui.dialog()
                 with dlg_lingdan, ui.card().classes('min-w-[460px] p-6'):
                     ui.label('分配物流并自动判定业务模式').classes('font-bold text-lg mb-1')
-                    ui.label('可从已配置物流中选择，也可直接手动填写').classes('text-xs text-gray-500 mb-4')
+                    ui.label('可搜索、可选择、可直接输入新物流').classes('text-xs text-gray-500 mb-4')
 
-                    comp_sel = ui.select(logistics_options, label='选择已配置物流').classes('w-full mb-2')
-                    comp_in = ui.input('或手动填写物流名称').classes('w-full mb-2')
-                    trk_in = ui.input('运单号（整车可不填）').classes('w-full mb-1')
+                    comp_choice = ui.select(logistics_options, label='物流选项*').props('use-input fill-input new-value-mode=add').classes('w-full mb-2')
+                    trk_in = ui.input('运单号（选填）').classes('w-full mb-1')
                     ui.label('规则：物流=整车 → 业务模式整车；其他物流公司 → 业务模式零单').classes('text-[11px] text-blue-600 mb-3')
 
                     async def save_lingdan():
-                        provider = (comp_in.value or comp_sel.value or '').strip()
+                        provider = (comp_choice.value or '').strip()
                         tracking_no = (trk_in.value or '').strip()
                         if not provider:
                             ui.notify('请填写或选择物流公司', type='warning')
-                            return
-                        if provider != '整车' and not tracking_no:
-                            ui.notify('第三方物流需填写运单号', type='warning')
                             return
                         await backend_db.assign_logistics(curr_sid.text, provider, tracking_no)
                         if provider == '整车':
@@ -908,8 +903,7 @@ async def shipments_content():
                             edit_qty.value = row['quantity']
                             edit_address.value = row['delivery_address']
                             current_edit_ship_type['value'] = row.get('ship_type', '待分配')
-                            edit_logistics_sel.value = row.get('logistics_provider') or None
-                            edit_logistics_input.value = row.get('logistics_provider', '')
+                            edit_logistics.value = row.get('logistics_provider') or None
                             edit_mode_hint.text = f"当前业务模式：{row.get('ship_type', '待分配')}"
                             edit_pickup.value = row.get('pickup_method', '送货上门')
                             edit_payment.value = row.get('payment_method', '现付')
@@ -951,9 +945,8 @@ async def shipments_content():
                         async def handle_fill_lingdan(e):
                             curr_sid.set_text(e.args['shipment_id'])
                             latest_opts_raw = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
-                            comp_sel.options = parse_logistics_options(latest_opts_raw)
-                            comp_sel.value = None
-                            comp_in.value = ''
+                            comp_choice.options = parse_logistics_options(latest_opts_raw)
+                            comp_choice.value = None
                             trk_in.value = ''
                             dlg_lingdan.open()
 
