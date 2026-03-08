@@ -77,8 +77,11 @@ async def fetch_all_shipments(
     params = []
     
     if status and status != '全部':
-        query += " AND status = ?"
-        params.append(status)
+        if status == '未订车':
+            query += " AND status IN ('未订车', '待分配物流')"
+        else:
+            query += " AND status = ?"
+            params.append(status)
         
     if customer_name:
         query += " AND customer_name LIKE ?"
@@ -100,7 +103,11 @@ async def fetch_all_shipments(
     
     async with get_conn() as conn:
         async with conn.execute(query, tuple(params)) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            rows = [dict(r) for r in await cur.fetchall()]
+    for row in rows:
+        if row.get('status') == '待分配物流':
+            row['status'] = '未订车'
+    return rows
 
 
 async def get_shipment_by_id(shipment_id: str) -> dict | None:
@@ -136,8 +143,8 @@ async def create_shipment(
     初始状态: 整车与零单均默认为 '未订车'。
     freight_fee = total_weight * unit_price + delivery_fee  (由 app 层计算后传入)
     """
-    # 新建时不再强制指定承运模式，统一进入“待分配物流”池，由文员后置分配
-    status = "待分配物流"
+    # 新建时统一视为“未订车”（等价于未分配物流），由文员后置分配
+    status = "未订车"
     token = None
     shipment_id = _generate_id("SHIP")
     order_id = _generate_id("ORD")
@@ -244,25 +251,23 @@ async def batch_delete_shipments(shipment_ids: list[str]) -> int:
     return deleted
 
 async def rollback_to_unbooked(shipment_id: str) -> None:
-    """逆向业务：异常回退，撤销发货并清空所有的物流/司机绑定信息，重发货车码"""
+    """逆向业务：异常回退，撤销发货并清空所有物流/司机绑定信息。"""
     async with get_conn() as conn:
         async with conn.execute(
-            "SELECT ship_type FROM shipments WHERE shipment_id = ?",
+            "SELECT 1 FROM shipments WHERE shipment_id = ?",
             (shipment_id,)
         ) as cur:
             row = await cur.fetchone()
-            if not row: return
-            ship_type = row["ship_type"]
-
-        token = uuid.uuid4().hex if ship_type == '整车' else None
+            if not row:
+                return
         
         await conn.execute(
             """UPDATE shipments
-               SET status='未订车', driver_token=?,
+               SET status='未订车', ship_type='待分配', logistics_provider=NULL, driver_token=NULL,
                    driver_name=NULL, driver_id_card=NULL, driver_phone=NULL, truck_plate=NULL, truck_type=NULL,
                    third_party_company=NULL, third_party_tracking=NULL, batch_id=NULL
                WHERE shipment_id=? AND status='已发货'""",
-            (token, shipment_id),
+            (shipment_id,),
         )
         await conn.commit()
 
@@ -543,7 +548,7 @@ async def get_dashboard_stats() -> dict:
 
         async with conn.execute(
             """SELECT COUNT(*) FROM shipments
-               WHERE status IN ('未订车','已订车')"""
+               WHERE status IN ('未订车','待分配物流','已订车')"""
         ) as cur:
             pending_count = (await cur.fetchone())[0]
 
@@ -554,8 +559,11 @@ async def get_dashboard_stats() -> dict:
             shipped_today = (await cur.fetchone())[0]
 
         async with conn.execute(
-            """SELECT status, COUNT(*) as cnt FROM shipments
-               GROUP BY status ORDER BY cnt DESC"""
+            """SELECT CASE WHEN status='待分配物流' THEN '未订车' ELSE status END AS status,
+                         COUNT(*) as cnt
+               FROM shipments
+               GROUP BY CASE WHEN status='待分配物流' THEN '未订车' ELSE status END
+               ORDER BY cnt DESC"""
         ) as cur:
             status_dist = [dict(r) for r in await cur.fetchall()]
 
