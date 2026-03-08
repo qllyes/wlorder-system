@@ -885,6 +885,9 @@ async def shipments_content():
                         {'name': 'customer', 'label': '收货人', 'field': 'customer_name', 'align': 'left'},
                         {'name': 'customer_phone', 'label': '收货电话', 'field': 'customer_phone', 'align': 'center'},
                         {'name': 'delivery_address', 'label': '收货地址', 'field': 'delivery_address', 'align': 'left'},
+                        {'name': 'driver_name', 'label': '司机姓名', 'field': 'driver_name', 'align': 'center'},
+                        {'name': 'driver_phone', 'label': '司机电话', 'field': 'driver_phone', 'align': 'center'},
+                        {'name': 'truck_plate', 'label': '车牌号', 'field': 'truck_plate', 'align': 'center'},
                         {'name': 'total_weight', 'label': '总重量(吨)', 'field': 'total_weight', 'align': 'center', 'sortable': True},
                         {'name': 'freight_fee', 'label': '托运单运输费', 'field': 'freight_fee', 'align': 'center', 'sortable': True},
                         {'name': 'actual_cost', 'label': '实付运输费', 'field': 'actual_cost', 'align': 'center', 'sortable': True},
@@ -898,85 +901,39 @@ async def shipments_content():
                         # ── 核心改造：使用 top 插槽高度内聚所有控制器 ──
                         with table.add_slot('top'):
                             with ui.column().classes('w-full gap-4 pb-2'):
-                                # 上层：大标题、批量操作（动态）、通用操作
-                                with ui.row().classes('w-full justify-between items-center'):
-                                    with ui.row().classes('items-center gap-4'):
-                                        ui.label('📦 调度总台账').classes('text-lg font-bold text-gray-800')
-                                        
-                                        # 针对勾选的批量动作区（默认隐藏，选中时滑出）
-                                        batch_actions = ui.row().classes('items-center gap-2 transition-all overflow-hidden')
-                                        with batch_actions:
-                                            ui.label().bind_text_from(table, 'selected', lambda s: f'已选 {len(s)} 项:').classes('text-sm font-bold text-blue-600')
-                                            
-                                            async def do_batch_lingdan():
-                                                selected = [row['shipment_id'] for row in table.selected if row['ship_type'] == '零单' and not row.get('batch_id')]
-                                                if not selected:
-                                                    ui.notify('请勾选尚未合单的【零单】进行合单', type='warning')
-                                                    return
-                                                bid = await backend_db.batch_lingdan(selected)
-                                                ui.notify(f'合单成功: {bid}', type='positive')
-                                                list_refreshable.refresh()
-                                                
-                                            async def on_batch_preview():
-                                                await display_batch_print_dialog([row for row in table.selected])
-                                                
-                                            async def on_batch_export():
-                                                await execute_batch_export([row for row in table.selected])
-                                                
-                                            def do_batch_delete():
-                                                nonlocal selected_ids_for_delete
-                                                selected_ids_for_delete = [row['shipment_id'] for row in table.selected]
-                                                batch_del_info.text = f'即将永久删除 {len(selected_ids_for_delete)} 条发货单记录，此操作不可恢复！'
-                                                dlg_batch_del.open()
-                                                
-                                            ui.button('🔗 零单合单', on_click=do_batch_lingdan).props('outline dense color=secondary')
-                                            ui.button('🖨️ 预览', on_click=on_batch_preview).props('outline dense color=blue')
-                                            ui.button('📥 导出Excel', on_click=on_batch_export).props('outline dense color=green')
-                                            ui.button('🗑️ 删除', on_click=do_batch_delete).props('outline dense color=red')
-                                            
-                                        # 动态显隐逻辑
-                                        batch_actions.bind_visibility_from(table, 'selected', lambda s: len(s) > 0)
+                                # 上层：仅保留批量操作（动态）
+                                with ui.row().classes('w-full justify-start items-center'):
+                                    batch_actions = ui.row().classes('items-center gap-2 transition-all overflow-hidden')
+                                    with batch_actions:
+                                        ui.label().bind_text_from(table, 'selected', lambda s: f'已选 {len(s)} 项:').classes('text-sm font-bold text-blue-600')
 
-                                    with ui.row().classes('items-center gap-2'):
-                                        with ui.button(icon='link', color='gray').props('flat round dense') as link_btn:
-                                            ui.tooltip('司机端链接')
-                                        with ui.menu():
-                                            with ui.column().classes('w-72 p-2 gap-2'):
-                                                base_url_input = ui.input('司机端访问前缀', value=(persisted_driver_base_url or default_driver_base_url)).props('dense outlined').classes('w-full')
+                                        async def do_batch_lingdan():
+                                            selected = [row['shipment_id'] for row in table.selected if row['ship_type'] == '零单' and not row.get('batch_id')]
+                                            if not selected:
+                                                ui.notify('请勾选尚未合单的【零单】进行合单', type='warning')
+                                                return
+                                            bid = await backend_db.batch_lingdan(selected)
+                                            ui.notify(f'合单成功: {bid}', type='positive')
+                                            list_refreshable.refresh()
 
-                                                async def save_driver_base_url():
-                                                    val = (base_url_input.value or '').strip()
-                                                    if not val:
-                                                        ui.notify('司机端访问前缀不能为空', type='warning')
-                                                        return
-                                                    if not (val.startswith('http://') or val.startswith('https://')):
-                                                        ui.notify('链接前缀需以 http:// 或 https:// 开头', type='warning')
-                                                        return
-                                                    await backend_db.set_setting('driver_base_url', val.rstrip('/'))
-                                                    ui.notify('司机端链接前缀已保存', type='positive')
+                                        async def on_batch_preview():
+                                            await display_batch_print_dialog([row for row in table.selected])
 
-                                                ui.button('保存链接前缀', on_click=save_driver_base_url, color='primary').props('dense')
+                                        async def on_batch_export():
+                                            await execute_batch_export([row for row in table.selected])
 
-                                        with ui.button(icon='local_shipping', color='gray').props('flat round dense') as logistics_btn:
-                                            ui.tooltip('物流选项配置')
-                                        with ui.menu():
-                                            with ui.column().classes('w-80 p-2 gap-2'):
-                                                logistics_opt_input = ui.input(
-                                                    '物流选项（逗号分隔）',
-                                                    value=','.join(logistics_options) if logistics_options else default_logistics_options,
-                                                ).props('dense outlined').classes('w-full')
+                                        def do_batch_delete():
+                                            nonlocal selected_ids_for_delete
+                                            selected_ids_for_delete = [row['shipment_id'] for row in table.selected]
+                                            batch_del_info.text = f'即将永久删除 {len(selected_ids_for_delete)} 条发货单记录，此操作不可恢复！'
+                                            dlg_batch_del.open()
 
-                                                async def save_logistics_options():
-                                                    nonlocal logistics_options
-                                                    parsed = parse_logistics_options(logistics_opt_input.value)
-                                                    if not parsed:
-                                                        ui.notify('请至少保留一个物流选项', type='warning')
-                                                        return
-                                                    logistics_options = parsed
-                                                    await backend_db.set_setting('logistics_provider_options', ','.join(parsed))
-                                                    ui.notify('物流选项已保存', type='positive')
+                                        ui.button('🔗 零单合单', on_click=do_batch_lingdan).props('outline dense color=secondary')
+                                        ui.button('🖨️ 预览', on_click=on_batch_preview).props('outline dense color=blue')
+                                        ui.button('📥 导出Excel', on_click=on_batch_export).props('outline dense color=green')
+                                        ui.button('🗑️ 删除', on_click=do_batch_delete).props('outline dense color=red')
 
-                                                ui.button('保存物流选项', on_click=save_logistics_options, color='primary').props('dense')
+                                    batch_actions.bind_visibility_from(table, 'selected', lambda s: len(s) > 0)
 
                                 # 下层：紧凑的筛选表单
                                 with ui.row().classes('w-full items-center gap-3 bg-gray-50 p-2 rounded justify-between'):
@@ -1004,7 +961,7 @@ async def shipments_content():
                                             apply_search()
                                             
                                         ui.button(icon='search', on_click=apply_search, color='primary').props('dense flat').tooltip('查询')
-                                        ui.button(icon='refresh', on_click=apply_reset, color='gray').props('dense flat').tooltip('重置')
+                                        ui.button(icon='refresh', on_click=apply_reset, color='primary').props('dense flat').tooltip('重置')
                                     
                                     with ui.row().classes('items-center'):
                                         async def export_csv():
@@ -1111,9 +1068,7 @@ async def shipments_content():
                             tk = e.args.get('driver_token', '')
                             if not tk: return
                             try:
-                                base_url = (base_url_input.value or '').strip()
-                                if not base_url:
-                                    base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+                                base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
                                 if not (base_url.startswith('http://') or base_url.startswith('https://')):
                                     ui.notify('司机端访问前缀格式错误，请先保存正确链接', type='warning')
                                     return
@@ -1363,7 +1318,38 @@ async def main_page():
 
 async def settings_content():
     with ui.column().classes('w-full max-w-4xl mx-auto mt-6 px-4 mb-12 gap-6'):
-        ui.label('⚙️ 系统设置 — 规格单重管理').classes('text-2xl font-bold tracking-tight text-gray-800')
+        ui.label('⚙️ 系统配置').classes('text-2xl font-bold tracking-tight text-gray-800')
+        with ui.card().classes('modern-card w-full p-6'):
+            ui.label('🔧 系统参数').classes('text-lg font-bold mb-4')
+            default_driver_base_url = f"http://{get_local_ip()}:8600"
+            current_driver_base_url = await backend_db.get_setting('driver_base_url', default_driver_base_url)
+            default_logistics_options = '整车,罗氏物流,小鹏物流'
+            current_logistics_options = await backend_db.get_setting('logistics_provider_options', default_logistics_options)
+
+            driver_prefix_input = ui.input('司机端访问前缀', value=(current_driver_base_url or default_driver_base_url)).props('outlined').classes('w-full mb-3')
+            logistics_options_input = ui.input('物流选项（逗号分隔）', value=current_logistics_options or default_logistics_options).props('outlined').classes('w-full mb-3')
+
+            async def save_system_params():
+                driver_val = (driver_prefix_input.value or '').strip()
+                if not driver_val:
+                    ui.notify('司机端访问前缀不能为空', type='warning')
+                    return
+                if not (driver_val.startswith('http://') or driver_val.startswith('https://')):
+                    ui.notify('司机端访问前缀需以 http:// 或 https:// 开头', type='warning')
+                    return
+
+                parsed_opts = parse_logistics_options(logistics_options_input.value)
+                if not parsed_opts:
+                    ui.notify('请至少保留一个物流选项', type='warning')
+                    return
+
+                await backend_db.set_setting('driver_base_url', driver_val.rstrip('/'))
+                await backend_db.set_setting('logistics_provider_options', ','.join(parsed_opts))
+                ui.notify('系统参数已保存', type='positive')
+
+            with ui.row().classes('w-full justify-end'):
+                ui.button('保存系统参数', on_click=save_system_params, color='primary')
+
         with ui.card().classes('modern-card w-full p-6'):
             ui.label('📦 规格配置').classes('text-lg font-bold mb-4')
             @ui.refreshable
