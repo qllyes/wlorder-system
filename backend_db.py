@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 import json
+import math
 
 import aiosqlite
 
@@ -487,11 +488,27 @@ async def save_shipment_products(
         )
         for p in products:
             raw_json = json.dumps(p, ensure_ascii=False)
+            qty = int(p.get('qty', p.get('quantity', 0)) or 0)
+            unit_weight = float(p.get('unit_weight_kg', 0) or 0)
+            line_weight = float(p.get('line_weight_kg', round(unit_weight * qty, 3)) or 0)
             await conn.execute(
                 """INSERT INTO shipment_products
-                   (shipment_id, product_name, spec, quantity, raw_data)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (shipment_id, p.get('name', ''), p.get('spec', ''), int(p.get('qty', 0)), raw_json),
+                   (shipment_id, product_name, spec, quantity,
+                    parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
+                    raw_data)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    shipment_id,
+                    p.get('name', p.get('product_name', '')),
+                    p.get('spec', ''),
+                    qty,
+                    p.get('parsed_spec', ''),
+                    unit_weight,
+                    line_weight,
+                    p.get('weight_source', 'manual_input'),
+                    int(p.get('weight_locked', 0) or 0),
+                    raw_json,
+                ),
             )
         await conn.commit()
 
@@ -500,7 +517,10 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
     """获取某发货单的全部商品明细行，包含展开的原始全量字典数据。"""
     async with get_conn() as conn:
         async with conn.execute(
-            "SELECT product_name, spec, quantity, raw_data FROM shipment_products WHERE shipment_id = ? ORDER BY id",
+            """SELECT id, product_name, spec, quantity,
+                      parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
+                      raw_data
+               FROM shipment_products WHERE shipment_id = ? ORDER BY id""",
             (shipment_id,),
         ) as cur:
             rows = await cur.fetchall()
@@ -516,9 +536,15 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
 
         # ── 标准化核心字段（以 DB 列名为准，兼容旧数据）──
         merged: dict = {
+            "id":           item.get("id"),
             "product_name": item.get("product_name") or raw_dict.get("name") or "",
             "spec":         item.get("spec") or raw_dict.get("spec") or "",
             "quantity":     item.get("quantity") or raw_dict.get("qty") or 0,
+            "parsed_spec":  item.get("parsed_spec") or raw_dict.get("parsed_spec") or "",
+            "unit_weight_kg": float(item.get("unit_weight_kg") or raw_dict.get("unit_weight_kg") or 0),
+            "line_weight_kg": float(item.get("line_weight_kg") or raw_dict.get("line_weight_kg") or 0),
+            "weight_source": item.get("weight_source") or raw_dict.get("weight_source") or "manual_input",
+            "weight_locked": int(item.get("weight_locked") or raw_dict.get("weight_locked") or 0),
         }
 
         # ── 展开 _raw（原始 Excel 行所有列）到顶层 ──
@@ -531,6 +557,215 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
 
         result.append(merged)
     return result
+
+
+async def recalc_shipment_weight_and_fee(shipment_id: str) -> None:
+    """根据商品明细行重量重算发货单总重量与托运单运输费。"""
+    async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT COALESCE(SUM(line_weight_kg), 0) AS total_kg FROM shipment_products WHERE shipment_id = ?",
+            (shipment_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            total_kg = float(row['total_kg'] or 0)
+
+        async with conn.execute(
+            "SELECT unit_price, delivery_fee FROM shipments WHERE shipment_id = ?",
+            (shipment_id,),
+        ) as cur:
+            ship = await cur.fetchone()
+            if not ship:
+                return
+            unit_price = float(ship['unit_price'] or 0)
+            delivery_fee = float(ship['delivery_fee'] or 0)
+
+        total_weight_t = round(total_kg / 1000, 3)
+        freight_fee = round(total_weight_t * unit_price + delivery_fee, 2)
+        await conn.execute(
+            "UPDATE shipments SET total_weight = ?, freight_fee = ? WHERE shipment_id = ?",
+            (total_weight_t, freight_fee, shipment_id),
+        )
+        await conn.commit()
+
+
+async def update_shipment_product_weight(
+    shipment_id: str,
+    product_row_id: int,
+    unit_weight_kg: float,
+    line_weight_kg: float,
+    operator: str = 'admin',
+    note: str = '',
+) -> None:
+    """更新商品行重量并记录留痕。"""
+    async with get_conn() as conn:
+        async with conn.execute(
+            """SELECT quantity, unit_weight_kg, line_weight_kg
+               FROM shipment_products WHERE id = ? AND shipment_id = ?""",
+            (product_row_id, shipment_id),
+        ) as cur:
+            old = await cur.fetchone()
+            if not old:
+                return
+
+        qty = int(old['quantity'] or 0)
+        new_unit = float(unit_weight_kg)
+        new_line = float(line_weight_kg)
+        if qty > 0 and (math.isclose(new_line, 0.0, abs_tol=1e-9) or math.isnan(new_line)):
+            new_line = round(new_unit * qty, 3)
+
+        await conn.execute(
+            """UPDATE shipment_products
+               SET unit_weight_kg=?, line_weight_kg=?, weight_source='manual_override', weight_locked=1
+               WHERE id=? AND shipment_id=?""",
+            (new_unit, new_line, product_row_id, shipment_id),
+        )
+        await conn.execute(
+            """INSERT INTO shipment_weight_logs
+               (shipment_id, product_row_id,
+                old_unit_weight_kg, new_unit_weight_kg,
+                old_line_weight_kg, new_line_weight_kg,
+                operator, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                shipment_id, product_row_id,
+                float(old['unit_weight_kg'] or 0), new_unit,
+                float(old['line_weight_kg'] or 0), new_line,
+                operator, note,
+            ),
+        )
+        await conn.commit()
+
+    await recalc_shipment_weight_and_fee(shipment_id)
+
+
+
+
+async def update_order_item_batch(items_list: list[dict]) -> None:
+    """批量更新订单商品明细行（事务原子性）。
+
+    items_list 每项需包含: id, shipment_id。
+    可更新字段: product_name/spec/parsed_spec/quantity/unit_weight_kg/line_weight_kg/weight_source/weight_locked
+    """
+    if not items_list:
+        return
+
+    editable_fields = (
+        'product_name', 'spec', 'parsed_spec', 'quantity',
+        'unit_weight_kg', 'line_weight_kg', 'weight_source', 'weight_locked',
+    )
+    affected_shipments: set[str] = set()
+
+    async with get_conn() as conn:
+        try:
+            await conn.execute('BEGIN TRANSACTION')
+            for item in items_list:
+                row_id = int(item.get('id') or 0)
+                shipment_id = (item.get('shipment_id') or '').strip()
+                if row_id <= 0 or not shipment_id:
+                    raise ValueError('批量更新缺少 id 或 shipment_id')
+
+                sets = []
+                vals = []
+                for f in editable_fields:
+                    if f in item:
+                        sets.append(f'{f}=?')
+                        vals.append(item.get(f))
+                if not sets:
+                    continue
+
+                vals.extend([row_id, shipment_id])
+                await conn.execute(
+                    f"UPDATE shipment_products SET {', '.join(sets)} WHERE id=? AND shipment_id=?",
+                    tuple(vals),
+                )
+                affected_shipments.add(shipment_id)
+
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+    for sid in affected_shipments:
+        await recalc_shipment_weight_and_fee(sid)
+
+
+async def create_order_with_items(
+    customer_name: str,
+    delivery_address: str,
+    items: list[dict],
+    customer_phone: str = '',
+    ship_type: str = '待分配',
+    unit_price: float = 0.0,
+    delivery_fee: float = 0.0,
+) -> str:
+    """一次性创建订单主记录 + 发货单 + 商品明细（事务一致性）。"""
+    order_id = _generate_id('ORDER')
+    shipment_id = _generate_id('SHIP')
+    safe_items = items or []
+    product_name = '、'.join((it.get('product_name') or it.get('name') or '') for it in safe_items[:3]).strip('、') or '未命名货品'
+    quantity = sum(int(it.get('quantity', it.get('qty', 0)) or 0) for it in safe_items)
+    total_kg = sum(float(it.get('line_weight_kg', 0) or 0) for it in safe_items)
+    total_weight = round(total_kg / 1000, 3)
+    freight_fee = round(total_weight * float(unit_price or 0) + float(delivery_fee or 0), 2)
+
+    async with get_conn() as conn:
+        try:
+            await conn.execute('BEGIN TRANSACTION')
+            await conn.execute(
+                """INSERT INTO orders
+                   (order_id, customer_name, product_name, quantity, delivery_address, status)
+                   VALUES (?, ?, ?, ?, ?, '待发货')""",
+                (order_id, customer_name, product_name, quantity, delivery_address),
+            )
+            await conn.execute(
+                """INSERT INTO shipments
+                   (shipment_id, order_id, ship_type, status,
+                    customer_name, delivery_address, product_name, quantity,
+                    customer_phone, total_weight, unit_price, delivery_fee, freight_fee)
+                   VALUES (?, ?, ?, '未订车', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    shipment_id, order_id, ship_type,
+                    customer_name, delivery_address, product_name, quantity,
+                    customer_phone, total_weight, float(unit_price or 0), float(delivery_fee or 0), freight_fee,
+                ),
+            )
+            for it in safe_items:
+                qty = int(it.get('quantity', it.get('qty', 0)) or 0)
+                await conn.execute(
+                    """INSERT INTO shipment_products
+                       (shipment_id, product_name, spec, quantity,
+                        parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
+                        raw_data)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        shipment_id,
+                        it.get('product_name') or it.get('name') or '',
+                        it.get('spec', ''),
+                        qty,
+                        it.get('parsed_spec', ''),
+                        float(it.get('unit_weight_kg', 0) or 0),
+                        float(it.get('line_weight_kg', 0) or 0),
+                        it.get('weight_source', 'manual_input'),
+                        int(it.get('weight_locked', 0) or 0),
+                        json.dumps(it, ensure_ascii=False),
+                    ),
+                )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+    return shipment_id
+
+
+async def get_shipment_weight_logs(shipment_id: str) -> list[dict]:
+    async with get_conn() as conn:
+        async with conn.execute(
+            """SELECT * FROM shipment_weight_logs
+               WHERE shipment_id = ? ORDER BY id DESC LIMIT 100""",
+            (shipment_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 # ════════════════════════════════════════════════

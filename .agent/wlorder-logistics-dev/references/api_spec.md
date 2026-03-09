@@ -87,3 +87,28 @@ async def get_dashboard_stats(date: str | None = None) -> dict:
 
 ### `set_shipment_logistics_provider(shipment_id: str, logistics_provider: str) -> None`
 仅更新 `shipments.logistics_provider` 字段，不触发状态流转（用于编辑场景的展示信息维护）。
+
+
+## 2026-03 扩展接口（订单明细批量编辑）
+
+### `update_order_item_batch(items_list: list[dict]) -> None`
+- 事务型批量更新 `shipment_products` 明细行。
+- 每项至少包含：`id`, `shipment_id`。
+- 支持字段：`product_name/spec/parsed_spec/quantity/unit_weight_kg/line_weight_kg/weight_source/weight_locked`。
+- 更新后按发货单维度自动触发 `recalc_shipment_weight_and_fee`。
+
+### `recalc_shipment_weight_and_fee(shipment_id: str) -> None`
+- 汇总 `shipment_products.line_weight_kg` 计算 `shipments.total_weight`(吨)。
+- 按公式 `freight_fee = total_weight * unit_price + delivery_fee` 重算托运单运输费。
+
+### `get_shipment_weight_logs(shipment_id: str) -> list[dict]`
+- 查询最近重量修改日志（倒序，最多100条）。
+
+### `create_order_with_items(customer_name, delivery_address, items) -> str`
+- 事务性创建主订单（可扩展用于未来主从订单一体录入场景）。
+
+### Excel 导入重量引擎（waybill_generator）
+- `normalize_spec_text(text)`：规格文本归一化。
+- `parse_spec_from_product_name(product_name)`：从商品名提取规格片段。
+- `match_spec_weight(product_name, spec, spec_weights)`：匹配规格单重与来源。
+- `enrich_products_with_weight(products, spec_weights)`：批量补齐行级重量字段。

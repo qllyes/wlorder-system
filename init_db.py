@@ -93,6 +93,11 @@ def init_db() -> None:
         product_name TEXT,
         spec         TEXT,
         quantity     INTEGER DEFAULT 0,
+        parsed_spec  TEXT DEFAULT '',
+        unit_weight_kg REAL DEFAULT 0,
+        line_weight_kg REAL DEFAULT 0,
+        weight_source TEXT DEFAULT 'manual_input',
+        weight_locked INTEGER DEFAULT 0,
         raw_data     TEXT DEFAULT '{}',
         FOREIGN KEY (shipment_id) REFERENCES shipments(shipment_id)
     )
@@ -102,6 +107,33 @@ def init_db() -> None:
         cur.execute("ALTER TABLE shipment_products ADD COLUMN raw_data TEXT DEFAULT '{}'")
     except sqlite3.OperationalError:
         pass  # 列已存在，忽略
+    for col_name, col_def in [
+        ("parsed_spec", "TEXT DEFAULT ''"),
+        ("unit_weight_kg", "REAL DEFAULT 0"),
+        ("line_weight_kg", "REAL DEFAULT 0"),
+        ("weight_source", "TEXT DEFAULT 'manual_input'"),
+        ("weight_locked", "INTEGER DEFAULT 0"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE shipment_products ADD COLUMN {col_name} {col_def}")
+        except sqlite3.OperationalError:
+            pass
+
+    # ── 商品明细重量修改留痕 ──
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS shipment_weight_logs (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        shipment_id       TEXT NOT NULL,
+        product_row_id    INTEGER,
+        old_unit_weight_kg REAL DEFAULT 0,
+        new_unit_weight_kg REAL DEFAULT 0,
+        old_line_weight_kg REAL DEFAULT 0,
+        new_line_weight_kg REAL DEFAULT 0,
+        operator          TEXT DEFAULT 'system',
+        note              TEXT DEFAULT '',
+        created_at        DATETIME DEFAULT (datetime('now','localtime'))
+    )
+    """)
 
     # ── 系统配置表（键值存储） ──
     cur.execute("""
