@@ -14,7 +14,6 @@ import re
 import datetime
 from pathlib import Path
 
-import openpyxl
 
 # ─── 固定配置（硬编码）────────────────────────────────────────────
 WAYBILL_TEMPLATE = Path(__file__).parent / "托运单.xlsx"
@@ -43,6 +42,42 @@ DEFAULT_SPEC_WEIGHTS: dict[str, float] = {
     "20L/桶":    21.0,
 }
 
+
+def normalize_spec_text(text: str) -> str:
+    t = (text or '').strip().lower()
+    t = t.replace('×', '*').replace('x', '*').replace('＊', '*')
+    t = re.sub(r'\s+', '', t)
+    return t
+
+
+def parse_spec_from_product_name(product_name: str) -> str:
+    """从商品名称中提取规格片段，如 305ml*12 / 20L/桶。"""
+    name = normalize_spec_text(product_name)
+    patterns = [
+        r'(\d+(?:\.\d+)?(?:ml|l)\*\d+)',
+        r'(\d+(?:\.\d+)?(?:ml|l)/桶)',
+        r'(\d+(?:\.\d+)?(?:ml|l)/箱)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, name, flags=re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return ''
+
+
+def match_spec_weight(product_name: str, spec: str, spec_weights: dict[str, float]) -> tuple[str, float, str]:
+    """返回(解析规格, 单重kg, 来源)。"""
+    normalized_sw = {normalize_spec_text(k): float(v) for k, v in spec_weights.items()}
+    parsed_spec = parse_spec_from_product_name(product_name) or normalize_spec_text(spec)
+    if parsed_spec and parsed_spec in normalized_sw:
+        return parsed_spec, normalized_sw[parsed_spec], 'spec_match'
+
+    combined = normalize_spec_text(f"{product_name}{spec}")
+    for key, w in normalized_sw.items():
+        if key and key in combined:
+            return key, w, 'spec_match'
+    return parsed_spec, 0.0, 'unmatched'
+
 # ─── 1. 解析订单 Excel ────────────────────────────────────────────
 
 def parse_order_excel(file_path: str | Path) -> dict:
@@ -66,6 +101,8 @@ def parse_order_excel(file_path: str | Path) -> dict:
         ]
     }
     """
+    import openpyxl
+
     file_path = Path(file_path)
 
     # 从文件名中提取托运单编号（数字+连字符部分，如 20260302-12）
@@ -126,10 +163,12 @@ def parse_order_excel(file_path: str | Path) -> dict:
             qty = 0
 
         if name:
+            parsed_spec = parse_spec_from_product_name(name)
             products.append({
                 "name": name,
                 "spec": spec,
                 "qty": qty,
+                "parsed_spec": parsed_spec,
                 "_raw": raw_row,  # 嵌套存储，避免字段名碰撞
             })
 
@@ -153,6 +192,30 @@ def _match_spec_weight(product_name: str, spec: str, spec_weights: dict[str, flo
     return 0.0
 
 
+def enrich_products_with_weight(
+    products: list[dict],
+    spec_weights: dict[str, float] | None = None,
+) -> list[dict]:
+    sw = {**DEFAULT_SPEC_WEIGHTS, **(spec_weights or {})}
+    enriched: list[dict] = []
+    for p in products:
+        qty = int(p.get('qty', p.get('quantity', 0)) or 0)
+        parsed_spec, unit_w, source = match_spec_weight(p.get('name', p.get('product_name', '')), p.get('spec', ''), sw)
+        unit_weight = float(p.get('unit_weight_kg', unit_w) or 0)
+        line_weight = float(p.get('line_weight_kg', round(unit_weight * qty, 3)) or 0)
+        merged = {**p}
+        merged.update({
+            'parsed_spec': p.get('parsed_spec') or parsed_spec,
+            'unit_weight_kg': unit_weight,
+            'line_weight_kg': line_weight,
+            'weight_mode': p.get('weight_mode') or '自动',
+            'weight_source': p.get('weight_source') or source,
+            'weight_locked': int(p.get('weight_locked', 0) or 0),
+        })
+        enriched.append(merged)
+    return enriched
+
+
 def calc_total_weight(
     products: list[dict],
     spec_weights: dict[str, float] | None = None,
@@ -165,7 +228,12 @@ def calc_total_weight(
     """
     sw = {**DEFAULT_SPEC_WEIGHTS, **(spec_weights or {})}
     total_qty = sum(p["qty"] for p in products)
-    total_kg = sum(p["qty"] * _match_spec_weight(p["name"], p.get("spec", ""), sw) for p in products)
+    total_kg = 0.0
+    for p in products:
+        if p.get('line_weight_kg') is not None:
+            total_kg += float(p.get('line_weight_kg') or 0)
+        else:
+            total_kg += p["qty"] * _match_spec_weight(p["name"], p.get("spec", ""), sw)
     total_t = round(total_kg / 1000, 1)
     return total_qty, total_t
 
@@ -234,6 +302,8 @@ def generate_waybill_excel(
     以「托运单.xlsx」为模板，填充数据后返回字节流。
     策略：先取消全部合并 → 写入数据 → 恢复合并，避免 MergedCell read-only 报错。
     """
+    import openpyxl
+
     wb = openpyxl.load_workbook(WAYBILL_TEMPLATE)
     ws = wb.active
 
@@ -300,3 +370,4 @@ def generate_waybill_excel(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+    import openpyxl
