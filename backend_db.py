@@ -169,6 +169,78 @@ async def create_shipment(
     return shipment_id
 
 
+async def create_order_with_items(
+    order_payload: dict,
+    items: list[dict],
+) -> str:
+    """事务化创建发货主单与商品明细。"""
+    status = "未订车"
+    token = None
+    shipment_id = _generate_id("SHIP")
+    order_id = _generate_id("ORD")
+
+    customer_name = order_payload.get('customer_name', '')
+    product_name = order_payload.get('product_name', '')
+    quantity = int(order_payload.get('quantity', 0) or 0)
+    delivery_address = order_payload.get('delivery_address', '')
+    ship_type = order_payload.get('ship_type', '待分配')
+    customer_phone = order_payload.get('customer_phone', '')
+    pickup_method = order_payload.get('pickup_method', '送货上门')
+    payment_method = order_payload.get('payment_method', '现付')
+    total_weight = float(order_payload.get('total_weight', 0) or 0)
+    unit_price = float(order_payload.get('unit_price', 0) or 0)
+    delivery_fee = float(order_payload.get('delivery_fee', 0) or 0)
+    freight_fee = float(order_payload.get('freight_fee', 0) or 0)
+
+    async with get_conn() as conn:
+        await conn.execute('BEGIN TRANSACTION')
+        try:
+            await conn.execute(
+                """INSERT INTO shipments
+                   (shipment_id, order_id, ship_type, status,
+                    customer_name, delivery_address, product_name, quantity,
+                    driver_token, customer_phone, pickup_method, payment_method,
+                    total_weight, unit_price, delivery_fee, freight_fee)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    shipment_id, order_id, ship_type, status,
+                    customer_name, delivery_address, product_name, quantity,
+                    token, customer_phone, pickup_method, payment_method,
+                    total_weight, unit_price, delivery_fee, freight_fee,
+                ),
+            )
+
+            for p in items:
+                raw_json = json.dumps(p, ensure_ascii=False)
+                qty = int(p.get('qty', p.get('quantity', 0)) or 0)
+                unit_weight = float(p.get('unit_weight_kg', 0) or 0)
+                line_weight = float(p.get('line_weight_kg', round(unit_weight * qty, 3)) or 0)
+                await conn.execute(
+                    """INSERT INTO shipment_products
+                       (shipment_id, product_name, spec, quantity,
+                        parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
+                        raw_data)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        shipment_id,
+                        p.get('name', p.get('product_name', '')),
+                        p.get('spec', ''),
+                        qty,
+                        p.get('parsed_spec', ''),
+                        unit_weight,
+                        line_weight,
+                        p.get('weight_source', 'manual_input'),
+                        int(p.get('weight_locked', 0) or 0),
+                        raw_json,
+                    ),
+                )
+            await conn.commit()
+            return shipment_id
+        except Exception:
+            await conn.rollback()
+            raise
+
+
 # ── 发货单基础操作 (修改与作废) ──
 
 async def update_shipment_info(
@@ -646,6 +718,56 @@ async def get_shipment_weight_logs(shipment_id: str) -> list[dict]:
             (shipment_id,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+async def update_order_item_batch(items_list: list[dict]) -> None:
+    """批量更新商品明细行（事务）。
+
+    items_list item:
+    {id, shipment_id, product_name, quantity, unit_weight_kg, line_weight_kg, spec, parsed_spec, weight_source}
+    """
+    if not items_list:
+        return
+    touched_shipments: set[str] = set()
+    async with get_conn() as conn:
+        await conn.execute('BEGIN TRANSACTION')
+        try:
+            for item in items_list:
+                rid = int(item.get('id') or 0)
+                sid = (item.get('shipment_id') or '').strip()
+                if not rid or not sid:
+                    continue
+                touched_shipments.add(sid)
+                qty = max(int(float(item.get('quantity', 0) or 0)), 0)
+                unit_w = max(float(item.get('unit_weight_kg', 0) or 0), 0)
+                line_w = item.get('line_weight_kg', None)
+                if line_w is None or str(line_w).strip() == '':
+                    line_w = round(unit_w * qty, 3)
+                line_w = max(float(line_w or 0), 0)
+                await conn.execute(
+                    """UPDATE shipment_products
+                       SET product_name=?, spec=?, quantity=?, parsed_spec=?,
+                           unit_weight_kg=?, line_weight_kg=?, weight_source=?, weight_locked=1
+                       WHERE id=? AND shipment_id=?""",
+                    (
+                        item.get('product_name', ''),
+                        item.get('spec', ''),
+                        qty,
+                        item.get('parsed_spec', ''),
+                        unit_w,
+                        line_w,
+                        item.get('weight_source', 'manual_override'),
+                        rid,
+                        sid,
+                    ),
+                )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+    for sid in touched_shipments:
+        await recalc_shipment_weight_and_fee(sid)
 
 
 # ════════════════════════════════════════════════

@@ -14,7 +14,6 @@ import re
 import datetime
 from pathlib import Path
 
-import openpyxl
 
 # ─── 固定配置（硬编码）────────────────────────────────────────────
 WAYBILL_TEMPLATE = Path(__file__).parent / "托运单.xlsx"
@@ -102,6 +101,8 @@ def parse_order_excel(file_path: str | Path) -> dict:
         ]
     }
     """
+    import openpyxl
+
     file_path = Path(file_path)
 
     # 从文件名中提取托运单编号（数字+连字符部分，如 20260302-12）
@@ -300,6 +301,8 @@ def generate_waybill_excel(
     以「托运单.xlsx」为模板，填充数据后返回字节流。
     策略：先取消全部合并 → 写入数据 → 恢复合并，避免 MergedCell read-only 报错。
     """
+    import openpyxl
+
     wb = openpyxl.load_workbook(WAYBILL_TEMPLATE)
     ws = wb.active
 
@@ -366,3 +369,4 @@ def generate_waybill_excel(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+    import openpyxl
