@@ -435,6 +435,7 @@ async def shipments_content():
                                 with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100 gap-2'):
                                     ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
                                     ui.label('从客户订单 Excel 导入并自动回填').classes('text-sm font-bold text-blue-800 flex-1')
+                                    import_mode = ui.select(['覆盖', '追加'], value='覆盖', label='导入方式').props('dense outlined').classes('w-28')
 
                                     async def on_excel_upload(e):
                                         try:
@@ -650,8 +651,6 @@ async def shipments_content():
                         ui.notify(f'发货单已生成 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         customer_input.value = ''
                         phone_input.value = ''
-                        product_input.value = ''
-                        qty_input.value = 1
                         address_input.value = ''
                         new_unit_price.value = 0
                         new_delivery_fee.value = 0
