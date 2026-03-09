@@ -459,6 +459,9 @@ async def shipments_content():
                                             customer_input.value = data['receiver_name']
                                             phone_input.value = data['receiver_phone']
                                             address_input.value = data['receiver_address']
+                                            province_input.value = data.get('receiver_province', '')
+                                            city_input.value = data.get('receiver_city', '')
+                                            district_input.value = data.get('receiver_district', '')
 
                                             prods = waybill_generator.enrich_products_with_weight(data.get('products', []), sw)
                                             if prods:
@@ -550,6 +553,9 @@ async def shipments_content():
                                 shipper_input = ui.input('托运人(发货方)', value='物流部').props('outlined dense')
                                 customer_input = ui.input('收货人*').props('outlined dense')
                                 phone_input = ui.input('收货电话').props('outlined dense')
+                                province_input = ui.input('省份').props('outlined dense')
+                                city_input = ui.input('城市').props('outlined dense')
+                                district_input = ui.input('区/县').props('outlined dense')
                                 address_input = ui.input('目的地/详细地址*').props('outlined dense').classes('col-span-2')
 
                         with ui.card().classes('w-full p-4 border shadow-sm'):
@@ -625,6 +631,10 @@ async def shipments_content():
                         up = float(new_unit_price.value or 0)
                         df = float(new_delivery_fee.value or 0)
                         freight_fee = round(total_weight_t * up + df, 2)
+                        parsed_addr = waybill_generator.parse_cn_address(address_input.value)
+                        province_val = province_input.value or parsed_addr.get('province', '')
+                        city_val = city_input.value or parsed_addr.get('city', '')
+                        district_val = district_input.value or parsed_addr.get('district', '')
                         
                         new_sid = await backend_db.create_order_with_items(
                             {
@@ -632,6 +642,9 @@ async def shipments_content():
                                 'product_name': product_input.value,
                                 'quantity': int(qty_input.value),
                                 'delivery_address': address_input.value,
+                                'receiver_province': province_val,
+                                'receiver_city': city_val,
+                                'receiver_district': district_val,
                                 'ship_type': '待分配',
                                 'customer_phone': phone_input.value,
                                 'total_weight': total_weight_t,
@@ -651,6 +664,9 @@ async def shipments_content():
                         ui.notify(f'发货单已生成 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         customer_input.value = ''
                         phone_input.value = ''
+                        province_input.value = ''
+                        city_input.value = ''
+                        district_input.value = ''
                         address_input.value = ''
                         new_unit_price.value = 0
                         new_delivery_fee.value = 0

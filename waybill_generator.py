@@ -42,6 +42,82 @@ DEFAULT_SPEC_WEIGHTS: dict[str, float] = {
     "20L/桶":    21.0,
 }
 
+PROVINCE_ALIASES: dict[str, str] = {
+    '北京': '北京市',
+    '天津': '天津市',
+    '上海': '上海市',
+    '重庆': '重庆市',
+    '内蒙古': '内蒙古自治区',
+    '广西': '广西壮族自治区',
+    '西藏': '西藏自治区',
+    '宁夏': '宁夏回族自治区',
+    '新疆': '新疆维吾尔自治区',
+    '香港': '香港特别行政区',
+    '澳门': '澳门特别行政区',
+    '河北': '河北省',
+    '山西': '山西省',
+    '辽宁': '辽宁省',
+    '吉林': '吉林省',
+    '黑龙江': '黑龙江省',
+    '江苏': '江苏省',
+    '浙江': '浙江省',
+    '安徽': '安徽省',
+    '福建': '福建省',
+    '江西': '江西省',
+    '山东': '山东省',
+    '河南': '河南省',
+    '湖北': '湖北省',
+    '湖南': '湖南省',
+    '广东': '广东省',
+    '海南': '海南省',
+    '四川': '四川省',
+    '贵州': '贵州省',
+    '云南': '云南省',
+    '陕西': '陕西省',
+    '甘肃': '甘肃省',
+    '青海': '青海省',
+    '台湾': '台湾省',
+}
+
+
+def parse_cn_address(address: str) -> dict[str, str]:
+    """将中文地址拆分为省、市、区县；无法识别时返回空串。"""
+    raw = (address or '').strip()
+    if not raw:
+        return {'province': '', 'city': '', 'district': ''}
+
+    remaining = re.sub(r'\s+', '', raw)
+    province = ''
+    city = ''
+    district = ''
+
+    m_province = re.match(
+        r'^(.*?省|.*?自治区|北京市|天津市|上海市|重庆市|.*?特别行政区)',
+        remaining,
+    )
+    if m_province:
+        province = m_province.group(1)
+        remaining = remaining[len(province):]
+    else:
+        for short, full in sorted(PROVINCE_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+            if remaining.startswith(short):
+                province = full
+                remaining = remaining[len(short):]
+                break
+
+    m_city = re.match(r'^(.*?市|.*?自治州|.*?地区|.*?盟)', remaining)
+    if m_city:
+        city = m_city.group(1)
+        remaining = remaining[len(city):]
+    elif province in {'北京市', '天津市', '上海市', '重庆市'}:
+        city = province
+
+    m_district = re.match(r'^(.*?县|.*?区|.*?旗|.*?海域|.*?岛)', remaining)
+    if m_district:
+        district = m_district.group(1)
+
+    return {'province': province, 'city': city, 'district': district}
+
 
 def normalize_spec_text(text: str) -> str:
     t = (text or '').strip().lower()
@@ -127,6 +203,9 @@ def parse_order_excel(file_path: str | Path) -> dict:
     receiver_name = ""
     receiver_phone = ""
     receiver_address = ""
+    receiver_province = ""
+    receiver_city = ""
+    receiver_district = ""
     products: list[dict] = []
 
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -152,6 +231,10 @@ def parse_order_excel(file_path: str | Path) -> dict:
             receiver_name = _g("收货人")
             receiver_phone = _g("收货电话")
             receiver_address = _g("收货地址")
+            parsed_addr = parse_cn_address(receiver_address)
+            receiver_province = parsed_addr['province']
+            receiver_city = parsed_addr['city']
+            receiver_district = parsed_addr['district']
 
         # 兼容多种表头命名：优先新名称，fallback 旧名称
         name = _g("商品名称") or _g("品名")
@@ -177,6 +260,9 @@ def parse_order_excel(file_path: str | Path) -> dict:
         "receiver_name": receiver_name,
         "receiver_phone": receiver_phone,
         "receiver_address": receiver_address,
+        "receiver_province": receiver_province,
+        "receiver_city": receiver_city,
+        "receiver_district": receiver_district,
         "products": products,
     }
 
