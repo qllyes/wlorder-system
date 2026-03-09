@@ -478,6 +478,14 @@ async def shipments_content():
                             ui.label(f'导入商品明细：{len(imported_products)} 行 | 总件数 {total_qty} | 总重量 {round(total_kg, 3)}kg').classes('text-xs text-gray-600')
                             if unmatched:
                                 ui.label(f'⚠️ 仍有 {unmatched} 行规格未匹配，提交前需补全单重').classes('text-xs text-orange-600')
+<<<<<<< codex/outline-implementation-plan-for-weight-calculation
+                            with ui.row().classes('w-full justify-end'):
+                                def add_import_row():
+                                    imported_products.append({'name': '新商品', 'spec': '', 'qty': 1, 'parsed_spec': '', 'unit_weight_kg': 0, 'line_weight_kg': 0, 'weight_source': 'manual_input', 'weight_locked': 0})
+                                    imported_rows_refreshable.refresh()
+                                ui.button('➕ 新增商品行', on_click=add_import_row, color='primary').props('flat dense')
+=======
+>>>>>>> main
                             for idx, p in enumerate(imported_products):
                                 with ui.row().classes('w-full items-center gap-2'):
                                     ui.label(f"{idx+1}. {p.get('name','')}").classes('text-xs w-[260px] truncate')
@@ -502,25 +510,38 @@ async def shipments_content():
                                     qn.on('update:model-value', _on_qty_change)
                                     wn.on('update:model-value', _on_weight_change)
 
+<<<<<<< codex/outline-implementation-plan-for-weight-calculation
+                    with ui.card().classes('mx-6 mt-2 p-3 bg-white border shadow-sm rounded-lg'):
+                        ui.label('模块 C：商品明细清单').classes('section-title mb-2')
+                        imported_rows_refreshable()
+
+=======
                     imported_rows_refreshable()
                     
+>>>>>>> main
                     with ui.column().classes('px-6 pb-4 gap-3'):
-                        with ui.column().classes('section-card w-full gap-1'):
-                            ui.label('收货信息').classes('section-title')
+                        with ui.column().classes('section-card w-full gap-2 p-4 shadow-sm'):
+                            ui.label('模块 A：基础与物流信息').classes('section-title')
                             with ui.row().classes('w-full gap-2'):
-                                customer_input = ui.input('收货人*').classes('flex-1 mb-1')
-                                phone_input = ui.input('收货电话').classes('flex-1 mb-1')
+                                customer_input = ui.input('收货人*').props('outlined dense').classes('flex-1 mb-1')
+                                phone_input = ui.input('收货电话').props('outlined dense').classes('flex-1 mb-1')
                             with ui.row().classes('w-full gap-2'):
-                                product_input = ui.input('货物品类*').classes('flex-[2] mb-1')
-                                qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').classes('flex-1 mb-1')
-                            address_input = ui.input('收货详细地址*').classes('w-full mb-1')
+                                product_input = ui.input('货物品类*').props('outlined dense').classes('flex-[2] mb-1')
+                                qty_input = ui.number('数量(件)*', value=1, min=1, format='%.0f').props('outlined dense').classes('flex-1 mb-1')
+                            address_input = ui.input('收货详细地址*').props('outlined dense').classes('w-full mb-1')
 
-                        with ui.column().classes('section-card w-full gap-1 bg-slate-50 border-slate-200'):
-                            ui.label('运费配置').classes('section-title')
+                        with ui.column().classes('section-card w-full gap-2 p-4 bg-slate-50 border-slate-200 shadow-sm'):
+                            ui.label('模块 B：财务与交接要求').classes('section-title')
                             with ui.row().classes('w-full gap-2 mb-1'):
+<<<<<<< codex/outline-implementation-plan-for-weight-calculation
+                                new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense').classes('flex-1')
+                                new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').props('outlined dense').classes('flex-1')
+                            manual_total_weight = ui.number('手工总重量(吨)', value=0, min=0, format='%.3f').props('outlined dense').classes('w-full')
+=======
                                 new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').classes('flex-1')
                                 new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').classes('flex-1')
                             manual_total_weight = ui.number('手工总重量(吨)', value=0, min=0, format='%.3f').classes('w-full')
+>>>>>>> main
                             with ui.row().classes('w-full items-center justify-between gap-2 p-2 rounded-lg bg-white border border-blue-100'):
                                 new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700')
                                 ui.label('业务模式将在后续【分配物流】自动判定（整车/零单）').classes('text-xs text-gray-500 text-right')
@@ -590,7 +611,7 @@ async def shipments_content():
 
                     with ui.row().classes('w-full justify-center items-center gap-3 mt-6 px-6 py-4 bg-white border-t border-gray-100'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
-                        ui.button('确认并立即生单', on_click=submit_shipment, color='primary')
+                        ui.button('🚀 确认创建订单', on_click=submit_shipment, color='primary')
                 
                 ui.button('新建发货单', icon='add', on_click=dlg_new_shipment.open).classes('bg-primary text-white font-bold')
 
@@ -1142,6 +1163,7 @@ async def shipments_content():
                         table.on('show_detail', handle_show_detail)
 
                 await list_refreshable()
+                _page_ctx['shipments_list_refresh'] = list_refreshable
     
     await main_shipments_refreshable()
 
@@ -1271,6 +1293,56 @@ async def main_page():
             ui.button('收起菜单', icon='chevron_left', on_click=left_drawer.toggle).props('flat dense size=sm').classes('text-gray-500 w-full')
 
     # ── 商品明细下钻面板（全景视口）──
+<<<<<<< codex/outline-implementation-plan-for-weight-calculation
+
+@ui.refreshable
+async def detail_view_refreshable():
+    sid = _page_ctx.get('detail_shipment_id', '')
+    detail_rows = await backend_db.get_shipment_products(sid) if sid else []
+    ship_info = await backend_db.get_shipment_by_id(sid) if sid else {}
+    allow_edit_shipped = (await backend_db.get_setting('allow_edit_shipped_weight', '0')) == '1'
+    can_edit_weight = bool(ship_info) and (ship_info.get('status') in ('未订车', '已订车') or allow_edit_shipped)
+
+    editable_rows: list[dict] = []
+    for row in detail_rows:
+        editable_rows.append({
+            'id': row.get('id'),
+            'shipment_id': sid,
+            'product_name': row.get('product_name', ''),
+            'spec': row.get('spec', ''),
+            'parsed_spec': row.get('parsed_spec', ''),
+            'quantity': int(row.get('quantity', 0) or 0),
+            'unit_weight_kg': float(row.get('unit_weight_kg', 0) or 0),
+            'line_weight_kg': float(row.get('line_weight_kg', 0) or 0),
+            'weight_source': row.get('weight_source', 'manual_input'),
+            'weight_locked': int(row.get('weight_locked', 0) or 0),
+        })
+
+    total_qty = sum(int(r.get('quantity', 0) or 0) for r in editable_rows)
+
+    with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-4'):
+        with ui.row().classes('w-full items-center justify-between'):
+            with ui.row().classes('items-center gap-3'):
+                ui.button(icon='arrow_back', on_click=lambda: switch_to_tab('shipments')).props('flat round color=primary')
+                ui.label(f'订单明细：{sid or "-"}').classes('text-2xl font-bold text-gray-800')
+            saving_state = {'value': False}
+
+            async def save_all_rows():
+                if not can_edit_weight:
+                    ui.notify('当前状态不允许编辑商品明细', type='warning')
+                    return
+                if saving_state['value']:
+                    return
+                try:
+                    saving_state['value'] = True
+                    for r in editable_rows:
+                        try:
+                            r['quantity'] = int(float(r.get('quantity', 0) or 0))
+                            r['unit_weight_kg'] = float(r.get('unit_weight_kg', 0) or 0)
+                            r['line_weight_kg'] = float(r.get('line_weight_kg', 0) or 0)
+                        except Exception:
+                            ui.notify(f"商品行#{r.get('id')} 数值格式错误", type='negative')
+=======
     @ui.refreshable
     async def detail_view_refreshable():
         sid = _page_ctx.get('detail_shipment_id', '')
@@ -1295,50 +1367,81 @@ async def main_page():
                     async def export_detail_excel():
                         if not detail_rows:
                             ui.notify('无商品明细可导出', type='warning')
+>>>>>>> main
                             return
-                        import csv
-                        output = io.StringIO()
-                        # 动态获取所有列名
-                        all_keys = list(dict.fromkeys(k for row in detail_rows for k in row.keys()))
-                        writer = csv.DictWriter(output, fieldnames=all_keys)
-                        writer.writeheader()
-                        for row in detail_rows:
-                            writer.writerow({k: row.get(k, '') for k in all_keys})
-                        csv_bytes = output.getvalue().encode('utf-8-sig')
-                        ui.download(csv_bytes, f'订单明细_{sid}.csv')
-                    ui.button('📥 导出明细 Excel', on_click=export_detail_excel, color='green-7').props('outline')
+                        if r['quantity'] < 0 or r['unit_weight_kg'] < 0 or r['line_weight_kg'] < 0:
+                            ui.notify(f"商品行#{r.get('id')} 存在负值，不允许保存", type='negative')
+                            return
+                    await backend_db.update_order_item_batch(editable_rows)
+                    ui.notify('修改成功', type='positive', position='top')
+                    detail_view_refreshable.refresh()
+                    if 'shipments_list_refresh' in _page_ctx:
+                        _page_ctx['shipments_list_refresh'].refresh()
+                except Exception as ex:
+                    ui.notify(f'保存失败：{ex}', type='negative')
+                finally:
+                    saving_state['value'] = False
 
-            # ── 下方：动态列宽表 ──
-            with ui.card().classes('modern-card w-full p-6'):
-                if not detail_rows:
-                    with ui.column().classes('w-full items-center py-12'):
-                        ui.icon('inbox', size='4rem', color='grey-4')
-                        ui.label('该发货单暂无商品明细记录').classes('text-gray-400 text-lg mt-4')
-                        ui.label('通过 Excel 导入创建的发货单才会有完整的商品明细行').classes('text-gray-300 text-sm')
-                else:
-                    # 动态列生成：从返回的字典 key 自动创建表格列定义
-                    # 排除内部元数据字段
-                    skip_keys = {'_raw', 'raw_data', 'name', 'qty'}
-                    all_keys = list(dict.fromkeys(
-                        k for row in detail_rows for k in row.keys() if k not in skip_keys
-                    ))
-                    dynamic_cols = [
-                        {'name': k, 'label': k, 'field': k, 'align': 'left' if i == 0 else 'center', 'sortable': True}
-                        for i, k in enumerate(all_keys)
-                    ]
-                    # 清洗行数据：确保所有值都是可序列化的基础类型
-                    clean_rows = []
-                    for row in detail_rows:
-                        clean = {}
-                        for k in all_keys:
-                            v = row.get(k, '')
-                            clean[k] = str(v) if v is not None else ''
-                        clean_rows.append(clean)
+            ui.button('💾 保存所有修改', on_click=save_all_rows, color='primary').props('unelevated')
 
-                    ui.label(f'共 {len(clean_rows)} 条商品记录').classes('text-sm text-gray-400 mb-2')
-                    ui.table(
-                        columns=dynamic_cols, rows=clean_rows, row_key=all_keys[0]
-                    ).classes('w-full').props('dense flat bordered')
+        if ship_info:
+            with ui.card().classes('w-full p-4 bg-blue-50 border border-blue-100 shadow-sm'):
+                with ui.grid(columns=4).classes('w-full gap-3 text-sm'):
+                    ui.label('发货人：物流部')
+                    ui.label(f"收货人：{ship_info.get('customer_name','')}")
+                    ui.label(f"总件数：{total_qty}")
+                    ui.label(f"总运费：¥{ship_info.get('freight_fee', 0) or 0}")
+
+        with ui.card().classes('modern-card w-full p-0 overflow-hidden'):
+            if not editable_rows:
+                with ui.column().classes('w-full items-center py-12'):
+                    ui.icon('inbox', size='4rem', color='grey-4')
+                    ui.label('该发货单暂无商品明细记录').classes('text-gray-400 text-lg mt-4')
+            else:
+                columns = [
+                    {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
+                    {'name': 'spec', 'label': '包装规格', 'field': 'spec', 'align': 'center'},
+                    {'name': 'parsed_spec', 'label': '解析规格', 'field': 'parsed_spec', 'align': 'center'},
+                    {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
+                    {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
+                    {'name': 'line_weight_kg', 'label': '重量(kg)', 'field': 'line_weight_kg', 'align': 'center'},
+                    {'name': 'weight_source', 'label': '来源', 'field': 'weight_source', 'align': 'center'},
+                ]
+                with ui.table(columns=columns, rows=editable_rows, row_key='id').classes('w-full') as dt:
+                    dt.props('flat bordered separator=cell dense')
+                    dt.add_slot('body', """
+                        <q-tr :props="props">
+                            <q-td key="product_name" :props="props">
+                                <q-input v-model="props.row.product_name" dense borderless />
+                            </q-td>
+                            <q-td key="spec" :props="props">
+                                <q-input v-model="props.row.spec" dense borderless />
+                            </q-td>
+                            <q-td key="parsed_spec" :props="props">
+                                <q-input v-model="props.row.parsed_spec" dense borderless />
+                            </q-td>
+                            <q-td key="quantity" :props="props">
+                                <q-input v-model.number="props.row.quantity" type="number" min="0" dense borderless />
+                            </q-td>
+                            <q-td key="unit_weight_kg" :props="props">
+                                <q-input v-model.number="props.row.unit_weight_kg" type="number" min="0" step="0.001" dense borderless />
+                            </q-td>
+                            <q-td key="line_weight_kg" :props="props">
+                                <q-input v-model.number="props.row.line_weight_kg" type="number" min="0" step="0.001" dense borderless />
+                            </q-td>
+                            <q-td key="weight_source" :props="props">
+                                <q-input v-model="props.row.weight_source" dense borderless />
+                            </q-td>
+                        </q-tr>
+                    """)
+
+        logs = await backend_db.get_shipment_weight_logs(sid) if sid else []
+        if logs:
+            with ui.expansion('最近重量修改记录', icon='history').classes('w-full'):
+                for lg in logs[:20]:
+                    ui.label(
+                        f"[{lg.get('created_at','')}] 行#{lg.get('product_row_id')} 单重 {lg.get('old_unit_weight_kg')}→{lg.get('new_unit_weight_kg')}kg, 行重 {lg.get('old_line_weight_kg')}→{lg.get('new_line_weight_kg')}kg, 操作人:{lg.get('operator','')}"
+                    ).classes('text-xs text-gray-600 mb-1')
 
                     with ui.card().classes('w-full mt-4 p-4 border border-blue-100 bg-blue-50'):
                         ui.label('重量修正（单重/行重）').classes('font-bold text-blue-900 mb-2')
