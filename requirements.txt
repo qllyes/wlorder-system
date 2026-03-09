@@ -3,3 +3,4 @@ aiosqlite
 pandas
 qrcode
 Pillow
+openpyxl
