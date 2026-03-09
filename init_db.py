@@ -96,7 +96,6 @@ def init_db() -> None:
         parsed_spec  TEXT DEFAULT '',
         unit_weight_kg REAL DEFAULT 0,
         line_weight_kg REAL DEFAULT 0,
-        weight_mode  TEXT DEFAULT '自动',
         weight_source TEXT DEFAULT 'manual_input',
         weight_locked INTEGER DEFAULT 0,
         raw_data     TEXT DEFAULT '{}',
@@ -112,7 +111,6 @@ def init_db() -> None:
         ("parsed_spec", "TEXT DEFAULT ''"),
         ("unit_weight_kg", "REAL DEFAULT 0"),
         ("line_weight_kg", "REAL DEFAULT 0"),
-        ("weight_mode", "TEXT DEFAULT '自动'"),
         ("weight_source", "TEXT DEFAULT 'manual_input'"),
         ("weight_locked", "INTEGER DEFAULT 0"),
     ]:

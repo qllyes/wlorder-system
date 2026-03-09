@@ -218,9 +218,9 @@ async def create_order_with_items(
                 await conn.execute(
                     """INSERT INTO shipment_products
                        (shipment_id, product_name, spec, quantity,
-                        parsed_spec, unit_weight_kg, line_weight_kg, weight_mode, weight_source, weight_locked,
+                        parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
                         raw_data)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         shipment_id,
                         p.get('name', p.get('product_name', '')),
@@ -229,7 +229,6 @@ async def create_order_with_items(
                         p.get('parsed_spec', ''),
                         unit_weight,
                         line_weight,
-                        p.get('weight_mode', '自动'),
                         p.get('weight_source', 'manual_input'),
                         int(p.get('weight_locked', 0) or 0),
                         raw_json,
@@ -567,9 +566,9 @@ async def save_shipment_products(
             await conn.execute(
                 """INSERT INTO shipment_products
                    (shipment_id, product_name, spec, quantity,
-                    parsed_spec, unit_weight_kg, line_weight_kg, weight_mode, weight_source, weight_locked,
+                    parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
                     raw_data)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     shipment_id,
                     p.get('name', p.get('product_name', '')),
@@ -578,7 +577,6 @@ async def save_shipment_products(
                     p.get('parsed_spec', ''),
                     unit_weight,
                     line_weight,
-                    p.get('weight_mode', '自动'),
                     p.get('weight_source', 'manual_input'),
                     int(p.get('weight_locked', 0) or 0),
                     raw_json,
@@ -592,7 +590,7 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
     async with get_conn() as conn:
         async with conn.execute(
             """SELECT id, product_name, spec, quantity,
-                      parsed_spec, unit_weight_kg, line_weight_kg, weight_mode, weight_source, weight_locked,
+                      parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
                       raw_data
                FROM shipment_products WHERE shipment_id = ? ORDER BY id""",
             (shipment_id,),
@@ -617,7 +615,6 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
             "parsed_spec":  item.get("parsed_spec") or raw_dict.get("parsed_spec") or "",
             "unit_weight_kg": float(item.get("unit_weight_kg") or raw_dict.get("unit_weight_kg") or 0),
             "line_weight_kg": float(item.get("line_weight_kg") or raw_dict.get("line_weight_kg") or 0),
-            "weight_mode": item.get("weight_mode") or raw_dict.get("weight_mode") or "自动",
             "weight_source": item.get("weight_source") or raw_dict.get("weight_source") or "manual_input",
             "weight_locked": int(item.get("weight_locked") or raw_dict.get("weight_locked") or 0),
         }
@@ -690,7 +687,7 @@ async def update_shipment_product_weight(
 
         await conn.execute(
             """UPDATE shipment_products
-               SET unit_weight_kg=?, line_weight_kg=?, weight_mode='手工', weight_source='manual_override', weight_locked=1
+               SET unit_weight_kg=?, line_weight_kg=?, weight_source='manual_override', weight_locked=1
                WHERE id=? AND shipment_id=?""",
             (new_unit, new_line, product_row_id, shipment_id),
         )
@@ -750,7 +747,7 @@ async def update_order_item_batch(items_list: list[dict]) -> None:
                 await conn.execute(
                     """UPDATE shipment_products
                        SET product_name=?, spec=?, quantity=?, parsed_spec=?,
-                           unit_weight_kg=?, line_weight_kg=?, weight_mode=?, weight_source=?, weight_locked=1
+                           unit_weight_kg=?, line_weight_kg=?, weight_source=?, weight_locked=1
                        WHERE id=? AND shipment_id=?""",
                     (
                         item.get('product_name', ''),
@@ -759,7 +756,6 @@ async def update_order_item_batch(items_list: list[dict]) -> None:
                         item.get('parsed_spec', ''),
                         unit_w,
                         line_w,
-                        item.get('weight_mode', '自动'),
                         item.get('weight_source', 'manual_override'),
                         rid,
                         sid,

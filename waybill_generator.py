@@ -208,7 +208,6 @@ def enrich_products_with_weight(
             'parsed_spec': p.get('parsed_spec') or parsed_spec,
             'unit_weight_kg': unit_weight,
             'line_weight_kg': line_weight,
-            'weight_mode': p.get('weight_mode') or '自动',
             'weight_source': p.get('weight_source') or source,
             'weight_locked': int(p.get('weight_locked', 0) or 0),
         })

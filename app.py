@@ -394,36 +394,22 @@ async def shipments_content():
                             ui.label('支持手工录入与 Excel 一键回填').classes('text-xs text-gray-500')
                         ui.button(icon='close', on_click=dlg_new_shipment.close).props('flat round dense')
                     
+                    imported_products: list[dict] = []
                     create_mode = {'value': 'manual'}
-                    order_items: list[dict] = [{
-                        'name': '',
-                        'spec': '',
-                        'qty': 1,
-                        'unit_weight_kg': 0.0,
-                        'line_weight_kg': 0.0,
-                        'weight_mode': '自动',
-                        'weight_source': 'manual_input',
-                    }]
 
-                    def summarize_items() -> tuple[int, float, int]:
+                    def recalc_imported_rows() -> tuple[int, float, int]:
                         total_qty = 0
                         total_kg = 0.0
                         unmatched = 0
-                        for row in order_items:
-                            qty = int(float(row.get('qty', 0) or 0))
-                            unit = float(row.get('unit_weight_kg', 0) or 0)
-                            line = float(row.get('line_weight_kg', 0) or 0)
+                        for p in imported_products:
+                            qty = int(p.get('qty', 0) or 0)
+                            unit_w = float(p.get('unit_weight_kg', 0) or 0)
+                            p['line_weight_kg'] = round(unit_w * qty, 3)
                             total_qty += qty
-                            total_kg += line
-                            if unit <= 0:
+                            total_kg += p['line_weight_kg']
+                            if p.get('weight_source') == 'unmatched' and unit_w <= 0:
                                 unmatched += 1
                         return total_qty, total_kg, unmatched
-
-                    def mark_auto_and_recalc(row: dict):
-                        qty = int(float(row.get('qty', 0) or 0))
-                        unit = float(row.get('unit_weight_kg', 0) or 0)
-                        row['line_weight_kg'] = round(qty * unit, 3)
-                        row['weight_mode'] = '自动'
                     
                     with ui.card().classes('mx-6 mt-4 p-4 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
                         ui.label('数据录入方式').classes('section-title')
@@ -475,23 +461,12 @@ async def shipments_content():
                                             address_input.value = data['receiver_address']
 
                                             prods = waybill_generator.enrich_products_with_weight(data.get('products', []), sw)
-                                            normalized_rows = []
-                                            for p in prods:
-                                                normalized_rows.append({
-                                                    'name': p.get('name', ''),
-                                                    'spec': p.get('parsed_spec') or p.get('spec', ''),
-                                                    'qty': int(p.get('qty', 0) or 0),
-                                                    'unit_weight_kg': float(p.get('unit_weight_kg', 0) or 0),
-                                                    'line_weight_kg': float(p.get('line_weight_kg', 0) or 0),
-                                                    'weight_mode': '自动',
-                                                    'weight_source': p.get('weight_source', 'spec_match'),
-                                                })
-                                            if import_mode.value == '覆盖':
-                                                order_items.clear()
-                                            order_items.extend(normalized_rows)
-                                            if not order_items:
-                                                order_items.append({'name': '', 'spec': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'weight_mode': '自动', 'weight_source': 'manual_input'})
-                                            order_items_table_refreshable.refresh()
+                                            if prods:
+                                                product_input.value = '、'.join([p['name'] for p in prods[:3]])
+                                                qty_input.value = sum(p['qty'] for p in prods)
+                                            imported_products.clear()
+                                            imported_products.extend(prods)
+                                            imported_rows_refreshable.refresh()
                                             ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品', type='positive')
                                         except Exception as ex:
                                             ui.notify(f'导入失败：{ex}', type='negative')
@@ -500,64 +475,72 @@ async def shipments_content():
                                 ui.label('支持 .xlsx / .xls，导入后将自动填充收货人、地址、货品和数量。').classes('text-xs text-blue-700 mt-2')
 
                     @ui.refreshable
-                    def order_items_table_refreshable():
+                    def imported_rows_refreshable():
+                        if not imported_products:
+                            return
+                        total_qty, total_kg, unmatched = recalc_imported_rows()
+                        with ui.column().classes('mx-6 mt-2 p-3 bg-white border border-blue-100 rounded-lg gap-2'):
+                            ui.label(f'导入商品明细：{len(imported_products)} 行 | 总件数 {total_qty} | 总重量 {round(total_kg, 3)}kg').classes('text-xs text-gray-600')
+                            if unmatched:
+                                ui.label(f'⚠️ 仍有 {unmatched} 行规格未匹配，提交前需补全单重').classes('text-xs text-orange-600')
+                            for idx, p in enumerate(imported_products):
+                                with ui.row().classes('w-full items-center gap-2'):
+                                    ui.label(f"{idx+1}. {p.get('name','')}").classes('text-xs w-[260px] truncate')
+                                    ui.input('规格', value=p.get('parsed_spec') or p.get('spec') or '').props('dense readonly').classes('w-28')
+                                    qn = ui.number('数量', value=int(p.get('qty', 0) or 0), min=0, format='%.0f').props('dense').classes('w-20')
+                                    wn = ui.number('单重(kg)', value=float(p.get('unit_weight_kg', 0) or 0), min=0, format='%.3f').props('dense').classes('w-24')
+                                    lw = ui.label(f"行重: {round(float(p.get('line_weight_kg', 0) or 0), 3)}kg").classes('text-xs text-blue-700')
+                                    status_text = '已匹配' if p.get('weight_source') != 'unmatched' or float(p.get('unit_weight_kg', 0) or 0) > 0 else '未匹配'
+                                    ui.label(status_text).classes('text-xs text-green-600' if status_text == '已匹配' else 'text-orange-600')
+
+                                    def _on_qty_change(e, row=p):
+                                        row['qty'] = int(float(e.value or 0))
+                                        row['line_weight_kg'] = round(float(row.get('unit_weight_kg', 0) or 0) * row['qty'], 3)
+                                        imported_rows_refreshable.refresh()
+
+                                    def _on_weight_change(e, row=p):
+                                        row['unit_weight_kg'] = float(e.value or 0)
+                                        row['line_weight_kg'] = round(row['unit_weight_kg'] * int(row.get('qty', 0) or 0), 3)
+                                        row['weight_source'] = 'manual_override' if row['unit_weight_kg'] > 0 else row.get('weight_source', 'unmatched')
+                                        imported_rows_refreshable.refresh()
+
+                                    qn.on('update:model-value', _on_qty_change)
+                                    wn.on('update:model-value', _on_weight_change)
+
+                    imported_rows_refreshable()
+                    manual_items: list[dict] = [{'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''}]
+
+                    @ui.refreshable
+                    def manual_items_refreshable():
                         with ui.column().classes('w-full gap-2'):
-                            total_qty, total_kg, unmatched = summarize_items()
-                            with ui.row().classes('w-full justify-between items-center mb-1'):
-                                ui.label(f'导入商品明细：{len(order_items)} 行 | 总件数 {total_qty} | 总重量 {round(total_kg, 3)}kg').classes('text-xs text-gray-600')
-                                if unmatched:
-                                    ui.label(f'⚠️ {unmatched} 行单重<=0').classes('text-xs text-orange-600')
+                            for i, item in enumerate(manual_items):
+                                with ui.row().classes('w-full items-center gap-2'):
+                                    n = ui.input('品名', value=item.get('name', '')).props('outlined dense').classes('flex-1')
+                                    q = ui.number('件数', value=item.get('qty', 1), min=0, format='%.0f').props('outlined dense').classes('w-24')
+                                    w = ui.number('单重(kg)', value=item.get('unit_weight_kg', 0), min=0, format='%.3f').props('outlined dense').classes('w-28')
+                                    s = ui.input('规格').props('outlined dense').classes('w-28')
 
-                            cols = [
-                                {'name': 'name', 'label': '品名', 'field': 'name', 'align': 'left'},
-                                {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
-                                {'name': 'qty', 'label': '数量', 'field': 'qty', 'align': 'center'},
-                                {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
-                                {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
-                            ]
-                            with ui.table(columns=cols, rows=order_items, row_key='name').classes('w-full') as ot:
-                                ot.add_slot('body', r'''
-                                    <q-tr :props="props">
-                                        <q-td key="name" :props="props">
-                                            <q-input dense borderless v-model="props.row.name" @update:model-value="$parent.$emit('cell_change',{row:props.row,key:'name',value:$event})"/>
-                                        </q-td>
-                                        <q-td key="spec" :props="props">
-                                            <q-input dense borderless v-model="props.row.spec" @update:model-value="$parent.$emit('cell_change',{row:props.row,key:'spec',value:$event})"/>
-                                        </q-td>
-                                        <q-td key="qty" :props="props">
-                                            <q-input dense borderless type="number" v-model.number="props.row.qty" @update:model-value="$parent.$emit('cell_change',{row:props.row,key:'qty',value:$event})"/>
-                                        </q-td>
-                                        <q-td key="unit_weight_kg" :props="props">
-                                            <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg" @update:model-value="$parent.$emit('cell_change',{row:props.row,key:'unit_weight_kg',value:$event})"/>
-                                        </q-td>
-                                        <q-td key="line_weight_kg" :props="props">
-                                            <q-input dense borderless type="number" step="0.001" v-model.number="props.row.line_weight_kg" @update:model-value="$parent.$emit('cell_change',{row:props.row,key:'line_weight_kg',value:$event})"/>
-                                        </q-td>
-                                    </q-tr>
-                                ''')
+                                    def _n(e, row=item):
+                                        row['name'] = e.value or ''
+                                    def _q(e, row=item):
+                                        row['qty'] = int(float(e.value or 0))
+                                        row['line_weight_kg'] = round(float(row.get('unit_weight_kg', 0) or 0) * row['qty'], 3)
+                                    def _w(e, row=item):
+                                        row['unit_weight_kg'] = float(e.value or 0)
+                                        row['line_weight_kg'] = round(row['unit_weight_kg'] * int(row.get('qty', 0) or 0), 3)
+                                    def _s(e, row=item):
+                                        row['spec'] = e.value or ''
 
-                                def on_item_cell_change(e):
-                                    args = e.args or {}
-                                    row = args.get('row') or {}
-                                    key = args.get('key')
-                                    value = args.get('value')
-                                    if key in {'qty', 'unit_weight_kg'}:
-                                        row[key] = float(value or 0) if key == 'unit_weight_kg' else int(float(value or 0))
-                                        mark_auto_and_recalc(row)
-                                    elif key == 'line_weight_kg':
-                                        row['line_weight_kg'] = float(value or 0)
-                                        row['weight_mode'] = '手工'
-                                    else:
-                                        row[key] = value or ''
-                                    order_items_table_refreshable.refresh()
+                                    n.on('update:model-value', _n)
+                                    q.on('update:model-value', _q)
+                                    w.on('update:model-value', _w)
+                                    s.on('update:model-value', _s)
 
-                                ot.on('cell_change', on_item_cell_change)
-
-                            def add_manual_item():
-                                order_items.append({'name': '', 'spec': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'weight_mode': '自动', 'weight_source': 'manual_input'})
-                                order_items_table_refreshable.refresh()
-
-                            ui.button('➕ 新增商品行', on_click=add_manual_item, color='primary').props('outline')
+                                    if len(manual_items) > 1:
+                                        def _rm(row=item):
+                                            manual_items.remove(row)
+                                            manual_items_refreshable.refresh()
+                                        ui.button(icon='delete', on_click=_rm).props('flat round color=red-5')
                     
                     with ui.column().classes('px-6 pb-4 gap-3'):
                         with ui.card().classes('w-full p-4 border shadow-sm'):
@@ -578,10 +561,17 @@ async def shipments_content():
                                 receipt_req_input = ui.select(['不要求', '电子回单', '纸质回单'], value='不要求', label='回单要求').props('outlined dense')
                                 new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense')
                                 new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').props('outlined dense')
+                            manual_total_weight = ui.number('手工总重量(吨)', value=0, min=0, format='%.3f').props('outlined dense').classes('w-full mt-2')
 
                         with ui.card().classes('w-full p-4 border shadow-sm'):
                             ui.label('模块C：商品明细清单').classes('section-title')
-                            order_items_table_refreshable()
+                            product_input = ui.input('货物品类汇总*').props('outlined dense').classes('w-full mb-2')
+                            qty_input = ui.number('数量汇总(件)*', value=1, min=1, format='%.0f').props('outlined dense').classes('w-48 mb-2')
+                            manual_items_refreshable()
+                            def add_manual_item():
+                                manual_items.append({'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''})
+                                manual_items_refreshable.refresh()
+                            ui.button('➕ 新增商品行', on_click=add_manual_item, color='primary').props('outline')
 
                         with ui.row().classes('w-full items-center justify-between gap-2 p-2 rounded-lg bg-white border border-blue-100'):
                             new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700')
@@ -591,37 +581,46 @@ async def shipments_content():
                         if not customer_input.value or not address_input.value:
                             ui.notify('请完整填写必填项', type='warning')
                             return
-                        typed_rows = [r for r in order_items if (r.get('name') or '').strip()]
-                        if not typed_rows:
-                            ui.notify('请至少填写一条商品明细', type='warning')
-                            return
+                        spec_rows = await backend_db.get_all_spec_weights()
+                        sw = {r['spec']: r['weight_kg'] for r in spec_rows}
 
-                        prods = []
-                        for r in typed_rows:
-                            row = {
-                                'name': r.get('name', ''),
-                                'spec': r.get('spec', ''),
-                                'qty': max(int(float(r.get('qty', 0) or 0)), 0),
-                                'parsed_spec': r.get('spec', ''),
-                                'unit_weight_kg': max(float(r.get('unit_weight_kg', 0) or 0), 0),
-                                'line_weight_kg': max(float(r.get('line_weight_kg', 0) or 0), 0),
-                                'weight_mode': r.get('weight_mode', '自动'),
-                                'weight_source': r.get('weight_source', 'manual_input'),
-                                'weight_locked': 1,
-                            }
-                            if row['weight_mode'] != '手工':
-                                row['line_weight_kg'] = round(row['qty'] * row['unit_weight_kg'], 3)
-                                row['weight_mode'] = '自动'
-                            prods.append(row)
-
-                        invalid_rows = [p for p in prods if p['qty'] <= 0 or p['line_weight_kg'] <= 0]
-                        if invalid_rows:
-                            ui.notify(f'存在 {len(invalid_rows)} 行数量或行重无效（需大于0）', type='negative')
-                            return
-
-                        total_qty = sum(int(p.get('qty', 0) or 0) for p in prods)
-                        total_weight_t = round(sum(float(p.get('line_weight_kg', 0) or 0) for p in prods) / 1000, 3)
-                        summary_product_name = '、'.join([p.get('name', '') for p in prods[:3]])
+                        if imported_products:
+                            prods = waybill_generator.enrich_products_with_weight(imported_products, sw)
+                            unmatched = [p for p in prods if float(p.get('unit_weight_kg', 0) or 0) <= 0]
+                            if unmatched:
+                                ui.notify(f'存在 {len(unmatched)} 行未匹配规格或单重为0，不允许提交', type='negative')
+                                return
+                            total_qty = sum(int(p.get('qty', 0) or 0) for p in prods)
+                            total_weight_t = round(sum(float(p.get('line_weight_kg', 0) or 0) for p in prods) / 1000, 3)
+                        else:
+                            typed_rows = [r for r in manual_items if (r.get('name') or '').strip()]
+                            if typed_rows:
+                                prods = [{
+                                    'name': r.get('name', ''),
+                                    'spec': r.get('spec', ''),
+                                    'qty': int(r.get('qty', 0) or 0),
+                                    'parsed_spec': '',
+                                    'unit_weight_kg': float(r.get('unit_weight_kg', 0) or 0),
+                                    'line_weight_kg': round(float(r.get('unit_weight_kg', 0) or 0) * int(r.get('qty', 0) or 0), 3),
+                                    'weight_source': 'manual_input',
+                                    'weight_locked': 1,
+                                } for r in typed_rows]
+                            else:
+                                prods = [{
+                                    'name': product_input.value,
+                                    'spec': '',
+                                    'qty': int(qty_input.value),
+                                    'parsed_spec': '',
+                                    'unit_weight_kg': round((float(manual_total_weight.value or 0) * 1000) / max(int(qty_input.value or 1), 1), 3),
+                                    'line_weight_kg': round(float(manual_total_weight.value or 0) * 1000, 3),
+                                    'weight_source': 'manual_input',
+                                    'weight_locked': 1,
+                                }]
+                            total_qty = sum(int(p.get('qty', 0) or 0) for p in prods)
+                            total_weight_t = float(manual_total_weight.value or 0)
+                            if not product_input.value:
+                                product_input.value = '、'.join([p['name'] for p in prods[:3]])
+                            qty_input.value = total_qty
                         # 公式: 托运单运输费 = 总重量 * 单价 + 运送费
                         up = float(new_unit_price.value or 0)
                         df = float(new_delivery_fee.value or 0)
@@ -630,8 +629,8 @@ async def shipments_content():
                         new_sid = await backend_db.create_order_with_items(
                             {
                                 'customer_name': customer_input.value,
-                                'product_name': summary_product_name,
-                                'quantity': total_qty,
+                                'product_name': product_input.value,
+                                'quantity': int(qty_input.value),
                                 'delivery_address': address_input.value,
                                 'ship_type': '待分配',
                                 'customer_phone': phone_input.value,
@@ -655,11 +654,14 @@ async def shipments_content():
                         address_input.value = ''
                         new_unit_price.value = 0
                         new_delivery_fee.value = 0
+                        manual_total_weight.value = 0
                         cod_input.value = 0
                         new_freight_display.text = '→ 托运单运输费: ¥0.00'
-                        order_items.clear()
-                        order_items.append({'name': '', 'spec': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'weight_mode': '自动', 'weight_source': 'manual_input'})
-                        order_items_table_refreshable.refresh()
+                        imported_products.clear()
+                        manual_items.clear()
+                        manual_items.append({'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''})
+                        manual_items_refreshable.refresh()
+                        imported_rows_refreshable.refresh()
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
@@ -1363,10 +1365,10 @@ async def main_page():
                 'shipment_id': sid,
                 'product_name': r.get('product_name', ''),
                 'spec': r.get('spec', ''),
+                'parsed_spec': r.get('parsed_spec', ''),
                 'quantity': int(float(r.get('quantity', 0) or 0)),
                 'unit_weight_kg': float(r.get('unit_weight_kg', 0) or 0),
                 'line_weight_kg': float(r.get('line_weight_kg', 0) or 0),
-                'weight_mode': r.get('weight_mode', '自动'),
                 'weight_source': r.get('weight_source', 'manual_override'),
             })
 
@@ -1381,9 +1383,6 @@ async def main_page():
             unit_w = float(target.get('unit_weight_kg', 0) or 0)
             if key in {'quantity', 'unit_weight_kg'}:
                 target['line_weight_kg'] = round(qty * unit_w, 3)
-                target['weight_mode'] = '自动'
-            elif key == 'line_weight_kg':
-                target['weight_mode'] = '手工'
             pending_edits[row_id] = dict(target)
 
         with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-4'):
@@ -1435,8 +1434,10 @@ async def main_page():
                         {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
                         {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
                         {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
+                        {'name': 'parsed_spec', 'label': '解析规格', 'field': 'parsed_spec', 'align': 'center'},
                         {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
                         {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
+                        {'name': 'weight_source', 'label': '计费方式', 'field': 'weight_source', 'align': 'center'},
                     ]
                     ui.label(f'共 {len(editable_rows)} 条商品记录（可行内编辑）').classes('text-sm text-gray-500 mb-2')
                     with ui.table(columns=cols, rows=editable_rows, row_key='id').classes('w-full') as editable_table:
@@ -1454,6 +1455,10 @@ async def main_page():
                                     <q-input dense borderless v-model="props.row.spec"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'spec', value: $event})" />
                                 </q-td>
+                                <q-td key="parsed_spec" :props="props">
+                                    <q-input dense borderless v-model="props.row.parsed_spec"
+                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'parsed_spec', value: $event})" />
+                                </q-td>
                                 <q-td key="unit_weight_kg" :props="props">
                                     <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event})" />
@@ -1461,6 +1466,10 @@ async def main_page():
                                 <q-td key="line_weight_kg" :props="props">
                                     <q-input dense borderless type="number" step="0.001" v-model.number="props.row.line_weight_kg"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: $event})" />
+                                </q-td>
+                                <q-td key="weight_source" :props="props">
+                                    <q-input dense borderless v-model="props.row.weight_source"
+                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'weight_source', value: $event})" />
                                 </q-td>
                             </q-tr>
                         ''')
