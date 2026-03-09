@@ -1503,6 +1503,52 @@ async def main_page():
                                     f"[{lg.get('created_at','')}] 行#{lg.get('product_row_id')} 单重 {lg.get('old_unit_weight_kg')}→{lg.get('new_unit_weight_kg')}kg, 行重 {lg.get('old_line_weight_kg')}→{lg.get('new_line_weight_kg')}kg, 备注:{lg.get('note','')}"
                                 ).classes('text-xs text-gray-600 mb-1')
 
+                    with ui.card().classes('w-full mt-4 p-4 border border-blue-100 bg-blue-50'):
+                        ui.label('重量修正（单重/行重）').classes('font-bold text-blue-900 mb-2')
+                        if not can_edit_weight:
+                            ui.label('当前状态默认禁止修改重量。仅未发货可改；已发货需在系统设置开启特权。').classes('text-xs text-gray-600')
+                        else:
+                            row_options = [f"{r.get('id')} - {r.get('product_name', '')}" for r in detail_rows if r.get('id')]
+                            row_select = ui.select(row_options, label='选择商品行').classes('w-full mb-2')
+                            edit_unit = ui.number('单重(kg)', value=0, min=0, format='%.3f').classes('w-full mb-2')
+                            edit_line = ui.number('行重(kg)', value=0, min=0, format='%.3f').classes('w-full mb-2')
+                            note_input = ui.input('修改备注').classes('w-full mb-2')
+
+                            def on_row_pick(e):
+                                rid = int(str(e.value).split(' - ')[0]) if e.value else 0
+                                target = next((x for x in detail_rows if int(x.get('id') or 0) == rid), None)
+                                if target:
+                                    edit_unit.value = float(target.get('unit_weight_kg', 0) or 0)
+                                    edit_line.value = float(target.get('line_weight_kg', 0) or 0)
+
+                            row_select.on('update:model-value', on_row_pick)
+
+                            async def do_weight_edit():
+                                if not row_select.value:
+                                    ui.notify('请先选择商品行', type='warning')
+                                    return
+                                rid = int(str(row_select.value).split(' - ')[0])
+                                await backend_db.update_shipment_product_weight(
+                                    sid,
+                                    rid,
+                                    float(edit_unit.value or 0),
+                                    float(edit_line.value or 0),
+                                    operator='admin',
+                                    note=(note_input.value or '').strip(),
+                                )
+                                ui.notify('重量修改已保存并留痕', type='positive')
+                                detail_view_refreshable.refresh()
+                                list_refreshable.refresh()
+
+                            ui.button('保存重量修正', on_click=do_weight_edit, color='primary')
+
+                    if logs:
+                        with ui.expansion('最近重量修改记录', icon='history').classes('mt-3 w-full'):
+                            for lg in logs[:20]:
+                                ui.label(
+                                    f"[{lg.get('created_at','')}] 行#{lg.get('product_row_id')} 单重 {lg.get('old_unit_weight_kg')}→{lg.get('new_unit_weight_kg')}kg, 行重 {lg.get('old_line_weight_kg')}→{lg.get('new_line_weight_kg')}kg, 备注:{lg.get('note','')}"
+                                ).classes('text-xs text-gray-600 mb-1')
+
     with ui.tab_panels(value='shipments').classes('w-full bg-transparent h-full') as panels:
         with ui.tab_panel('shipments').classes('p-0'): await shipments_content()
         with ui.tab_panel('dashboard').classes('p-0'): await dashboard_content()
