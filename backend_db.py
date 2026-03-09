@@ -658,7 +658,7 @@ async def recalc_shipment_weight_and_fee(shipment_id: str) -> None:
             total_kg = float(row['total_kg'] or 0)
 
         async with conn.execute(
-            "SELECT unit_price, delivery_fee FROM shipments WHERE shipment_id = ?",
+            "SELECT unit_price, delivery_fee, freight_fee_mode, freight_fee FROM shipments WHERE shipment_id = ?",
             (shipment_id,),
         ) as cur:
             ship = await cur.fetchone()
@@ -666,13 +666,21 @@ async def recalc_shipment_weight_and_fee(shipment_id: str) -> None:
                 return
             unit_price = float(ship['unit_price'] or 0)
             delivery_fee = float(ship['delivery_fee'] or 0)
+            freight_fee_mode = (ship['freight_fee_mode'] or 'auto').strip() or 'auto'
+            current_fee = float(ship['freight_fee'] or 0)
 
         total_weight_t = round(total_kg / 1000, 3)
-        freight_fee = round(total_weight_t * unit_price + delivery_fee, 2)
-        await conn.execute(
-            "UPDATE shipments SET total_weight = ?, freight_fee = ? WHERE shipment_id = ?",
-            (total_weight_t, freight_fee, shipment_id),
-        )
+        if total_weight_t > 8 and freight_fee_mode == 'manual':
+            await conn.execute(
+                "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
+                (total_weight_t, current_fee, 'manual', shipment_id),
+            )
+        else:
+            freight_fee = round(total_weight_t * unit_price + delivery_fee, 2)
+            await conn.execute(
+                "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
+                (total_weight_t, freight_fee, 'auto', shipment_id),
+            )
         await conn.commit()
 
 

@@ -567,6 +567,7 @@ async def shipments_content():
                                 receipt_req_input = ui.select(['不要求', '电子回单', '纸质回单'], value='不要求', label='回单要求').props('outlined dense')
                                 new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense')
                                 new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').props('outlined dense')
+                                manual_freight_fee = ui.number('托运单运输费(>8吨手填)', value=0, min=0, format='%.2f').props('outlined dense')
                             manual_total_weight = ui.number('手工总重量(吨)', value=0, min=0, format='%.3f').props('outlined dense').classes('w-full mt-2')
 
                         with ui.card().classes('w-full p-4 border shadow-sm'):
@@ -651,6 +652,8 @@ async def shipments_content():
                                 'unit_price': up,
                                 'delivery_fee': df,
                                 'freight_fee': freight_fee,
+                                'freight_fee_mode': freight_fee_mode,
+                                'unit_price_source': unit_price_source,
                                 'pickup_method': pickup_method_input.value,
                                 'payment_method': payment_method_input.value,
                                 'order_date': date_input.value,
@@ -670,6 +673,7 @@ async def shipments_content():
                         address_input.value = ''
                         new_unit_price.value = 0
                         new_delivery_fee.value = 0
+                        manual_freight_fee.value = 0
                         manual_total_weight.value = 0
                         cod_input.value = 0
                         new_freight_display.text = '→ 托运单运输费: ¥0.00'
@@ -781,6 +785,7 @@ async def shipments_content():
                     with ui.row().classes('w-full gap-2 mb-2'):
                         edit_unit_price = ui.number('单价(元/吨)', value=0, min=0, format='%.2f').classes('flex-1')
                         edit_delivery = ui.number('运送费(元)', value=0, min=0, format='%.2f').classes('flex-1')
+                    edit_manual_freight = ui.number('托运单运输费(>8吨手填)', value=0, min=0, format='%.2f').classes('w-full mb-3')
                         
                     ui.separator().classes('my-4')
                     ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
@@ -798,7 +803,30 @@ async def shipments_content():
                         _, total_weight_t = waybill_generator.calc_total_weight(prods, sw)
                         up = float(edit_unit_price.value or 0)
                         df = float(edit_delivery.value or 0)
-                        freight_fee = round(total_weight_t * up + df, 2)
+                        parsed_addr = waybill_generator.parse_cn_address(edit_address.value)
+                        try:
+                            matched_price = freight_calc.lookup_unit_price(
+                                parsed_addr.get('province', ''),
+                                parsed_addr.get('city', ''),
+                                parsed_addr.get('district', ''),
+                            )
+                        except Exception as ex:
+                            ui.notify(f'单价表匹配失败，将使用手工单价：{ex}', type='warning')
+                            matched_price = None
+                        unit_price_source = 'manual_input'
+                        if matched_price is not None:
+                            up = float(matched_price)
+                            edit_unit_price.value = up
+                            unit_price_source = 'district_match'
+                        if total_weight_t > 8:
+                            freight_fee = float(edit_manual_freight.value or 0)
+                            if freight_fee <= 0:
+                                ui.notify('总重量超过8吨，托运单运输费需手动填写且大于0', type='warning')
+                                return
+                            freight_fee_mode = 'manual'
+                        else:
+                            freight_fee = round(total_weight_t * up + df, 2)
+                            freight_fee_mode = 'auto'
                         
                         provider = current_edit_logistics['value']
                         inferred_mode = current_edit_ship_type['value']
@@ -812,6 +840,7 @@ async def shipments_content():
                             edit_pickup.value, edit_payment.value,
                             total_weight=total_weight_t, unit_price=up,
                             delivery_fee=df, freight_fee=freight_fee,
+                            freight_fee_mode=freight_fee_mode, unit_price_source=unit_price_source,
                         )
                         if provider:
                             await ensure_logistics_option(provider)
@@ -1175,6 +1204,7 @@ async def shipments_content():
                             edit_payment.value = row.get('payment_method', '现付')
                             edit_unit_price.value = row.get('unit_price', 0)
                             edit_delivery.value = row.get('delivery_fee', 0)
+                            edit_manual_freight.value = row.get('freight_fee', 0)
                             dlg_edit.open()
                             
                         def handle_cancel_shipment(e):
