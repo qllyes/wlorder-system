@@ -14,8 +14,8 @@ from typing import Optional
 
 import pandas as pd
 
-# 内表文件路径（与项目同目录）
-_FREIGHT_TABLE_PATH = Path(__file__).parent / "2025年内表 - .xlsx"
+# 单价表文件路径（与项目同目录）
+_FREIGHT_TABLE_PATH = Path(__file__).parent / "单价表.xlsx"
 
 # 默认包装规格单重（kg/件），可在系统设置中覆盖
 DEFAULT_SPEC_WEIGHTS: dict[str, float] = {
@@ -31,16 +31,34 @@ DEFAULT_SPEC_WEIGHTS: dict[str, float] = {
 @lru_cache(maxsize=1)
 def load_freight_table() -> pd.DataFrame:
     """加载内表到内存（仅首次加载，后续走缓存）。"""
-    df = pd.read_excel(
-        _FREIGHT_TABLE_PATH,
-        sheet_name="最新",
-        usecols=["省份", "地级市", "区.县", "运价（元/吨）"],
-        dtype=str,
-    )
+    if not _FREIGHT_TABLE_PATH.exists():
+        raise FileNotFoundError(f"未找到单价表文件: {_FREIGHT_TABLE_PATH}")
+
+    df = pd.read_excel(_FREIGHT_TABLE_PATH, dtype=str)
+    col_aliases = {
+        '区.县': '区县',
+        '区/县': '区县',
+        '区or县': '区县',
+        '运价（元/吨）': '运价',
+        '运价(元/吨)': '运价',
+        '运价': '运价',
+    }
+    df = df.rename(columns=col_aliases)
+    required = {'省份', '地级市', '区县', '运价'}
+    if not required.issubset(set(df.columns)):
+        raise ValueError(f"单价表缺少必要列，当前列: {list(df.columns)}")
+
+    df = df[list(required)].copy()
+
+    def _norm_region(v: str) -> str:
+        t = str(v or '').strip().replace(' ', '')
+        t = t.replace('自治区', '').replace('特别行政区', '').replace('省', '').replace('市', '')
+        return t
+
     # 统一去除空格，防止匹配失败
-    for col in ["省份", "地级市", "区.县"]:
-        df[col] = df[col].str.strip()
-    df["运价（元/吨）"] = pd.to_numeric(df["运价（元/吨）"], errors="coerce")
+    for col in ["省份", "地级市", "区县"]:
+        df[col] = df[col].map(_norm_region)
+    df["运价"] = pd.to_numeric(df["运价"], errors="coerce")
     return df
 
 
@@ -61,15 +79,22 @@ def lookup_unit_price(
     df = load_freight_table()
 
     def _first(mask: pd.Series) -> Optional[float]:
-        rows = df[mask]["运价（元/吨）"].dropna()
+        rows = df[mask]["运价"].dropna()
         return float(rows.iloc[0]) if not rows.empty else None
+
+    def _norm_region(v: str) -> str:
+        return str(v or '').strip().replace(' ', '').replace('自治区', '').replace('特别行政区', '').replace('省', '').replace('市', '')
+
+    province = _norm_region(province)
+    city = _norm_region(city)
+    district = _norm_region(district)
 
     # 1. 全匹配
     if district:
         result = _first(
             (df["省份"] == province.strip())
             & (df["地级市"] == city.strip())
-            & (df["区.县"] == district.strip())
+            & (df["区县"] == district.strip())
         )
         if result is not None:
             return result
