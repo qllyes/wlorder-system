@@ -141,8 +141,6 @@ async def create_shipment(
     receiver_province: str = '',
     receiver_city: str = '',
     receiver_district: str = '',
-    freight_fee_mode: str = 'auto',
-    unit_price_source: str = 'manual_input',
 ) -> str:
     """
     新建发货单（脱离 orders 表独立运行）。
@@ -162,16 +160,14 @@ async def create_shipment(
                 customer_name, delivery_address, product_name, quantity,
                 driver_token, customer_phone,
                 total_weight, unit_price, delivery_fee, freight_fee,
-                receiver_province, receiver_city, receiver_district,
-                freight_fee_mode, unit_price_source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                receiver_province, receiver_city, receiver_district)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 shipment_id, order_id, ship_type, status,
                 customer_name, delivery_address, product_name, quantity,
                 token, customer_phone,
                 total_weight, unit_price, delivery_fee, freight_fee,
                 receiver_province, receiver_city, receiver_district,
-                freight_fee_mode, unit_price_source,
             ),
         )
         await conn.commit()
@@ -203,8 +199,6 @@ async def create_order_with_items(
     receiver_province = order_payload.get('receiver_province', '')
     receiver_city = order_payload.get('receiver_city', '')
     receiver_district = order_payload.get('receiver_district', '')
-    freight_fee_mode = order_payload.get('freight_fee_mode', 'auto')
-    unit_price_source = order_payload.get('unit_price_source', 'manual_input')
 
     async with get_conn() as conn:
         await conn.execute('BEGIN TRANSACTION')
@@ -215,16 +209,14 @@ async def create_order_with_items(
                     customer_name, delivery_address, product_name, quantity,
                     driver_token, customer_phone, pickup_method, payment_method,
                     total_weight, unit_price, delivery_fee, freight_fee,
-                    receiver_province, receiver_city, receiver_district,
-                    freight_fee_mode, unit_price_source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    receiver_province, receiver_city, receiver_district)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     shipment_id, order_id, ship_type, status,
                     customer_name, delivery_address, product_name, quantity,
                     token, customer_phone, pickup_method, payment_method,
                     total_weight, unit_price, delivery_fee, freight_fee,
                     receiver_province, receiver_city, receiver_district,
-                    freight_fee_mode, unit_price_source,
                 ),
             )
 
@@ -278,8 +270,6 @@ async def update_shipment_info(
     receiver_province: str = '',
     receiver_city: str = '',
     receiver_district: str = '',
-    freight_fee_mode: str = 'auto',
-    unit_price_source: str = 'manual_input',
 ) -> None:
     """编辑未发货的发货单基础信息，包含业务模式的切换及打单配置的更新"""
     async with get_conn() as conn:
@@ -307,7 +297,6 @@ async def update_shipment_info(
                    pickup_method=?, payment_method=?, customer_phone=?,
                    total_weight=?, unit_price=?, delivery_fee=?, freight_fee=?,
                    receiver_province=?, receiver_city=?, receiver_district=?,
-                   freight_fee_mode=?, unit_price_source=?,
                    driver_name=NULL, driver_id_card=NULL, driver_phone=NULL, truck_plate=NULL, truck_type=NULL,
                    third_party_company=NULL, third_party_tracking=NULL, batch_id=NULL
                WHERE shipment_id=? AND status IN ('未订车', '已订车')""",
@@ -315,7 +304,6 @@ async def update_shipment_info(
              pickup_method, payment_method, customer_phone,
              total_weight, unit_price, delivery_fee, freight_fee,
              receiver_province, receiver_city, receiver_district,
-             freight_fee_mode, unit_price_source,
              shipment_id),
         )
         await conn.commit()

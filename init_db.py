@@ -81,8 +81,6 @@ def init_db() -> None:
         ("receiver_province",   "TEXT DEFAULT ''"),
         ("receiver_city",       "TEXT DEFAULT ''"),
         ("receiver_district",   "TEXT DEFAULT ''"),
-        ("freight_fee_mode",    "TEXT DEFAULT 'auto'"),
-        ("unit_price_source",   "TEXT DEFAULT 'manual_input'"),
     ]
     for col_name, col_def in _add_columns:
         try:
