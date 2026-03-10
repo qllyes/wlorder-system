@@ -776,10 +776,24 @@ async def update_order_item_batch(items_list: list[dict]) -> None:
                 if line_w is None or str(line_w).strip() == '':
                     line_w = round(unit_w * qty, 3)
                 line_w = max(float(line_w or 0), 0)
+                # 🆕 同步更新 raw_data 字段，确保 get_shipment_products 合并逻辑获取到最新值
+                p_for_json = {
+                    'name': item.get('product_name', ''),
+                    'spec': item.get('spec', ''),
+                    'qty': qty,
+                    'parsed_spec': item.get('parsed_spec', ''),
+                    'unit_weight_kg': unit_w,
+                    'line_weight_kg': line_w,
+                    'weight_source': item.get('weight_source', 'manual_override'),
+                    'weight_locked': 1
+                }
+                raw_json = json.dumps(p_for_json, ensure_ascii=False)
+
                 await conn.execute(
                     """UPDATE shipment_products
                        SET product_name=?, spec=?, quantity=?, parsed_spec=?,
-                           unit_weight_kg=?, line_weight_kg=?, weight_source=?, weight_locked=1
+                           unit_weight_kg=?, line_weight_kg=?, weight_source=?, weight_locked=1,
+                           raw_data=?
                        WHERE id=? AND shipment_id=?""",
                     (
                         item.get('product_name', ''),
@@ -789,6 +803,7 @@ async def update_order_item_batch(items_list: list[dict]) -> None:
                         unit_w,
                         line_w,
                         item.get('weight_source', 'manual_override'),
+                        raw_json, # 新增
                         rid,
                         sid,
                     ),

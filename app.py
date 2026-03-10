@@ -385,170 +385,273 @@ async def shipments_content():
             with ui.row().classes('w-full justify-between items-center'):
                 ui.label('发货单调度与管理').classes('text-2xl font-bold tracking-tight text-gray-800')
                 
-                # ── 新建发货单入口 ──
                 dlg_new_shipment = ui.dialog()
-                with dlg_new_shipment, ui.card().classes('new-shipment-dialog w-[780px] max-w-[96vw] max-h-[90vh] p-0 overflow-y-auto'):
+                with dlg_new_shipment, ui.card().classes('new-shipment-dialog w-[900px] max-w-[98vw] max-h-[90vh] p-0 overflow-y-auto'):
+                    # 🎨 注入 CSS：彻底隐藏 Quasar Uploader 的原生 UI，仅保留逻辑和拖拽响应
+                    ui.add_head_html('''
+                        <style>
+                        .new-shipment-dialog .hide-uploader-ui .q-uploader__header { display: none !important; }
+                        .new-shipment-dialog .hide-uploader-ui .q-uploader__list { display: none !important; }
+                        .new-shipment-dialog .hide-uploader-ui.q-uploader { 
+                            background: transparent !important; 
+                            box-shadow: none !important; 
+                            min-height: unset !important;
+                            border: none !important;
+                            width: 100% !important;
+                        }
+                        /* 增加一个全局的拖拽提示样式 */
+                        .drop-zone-active { border-color: #3b82f6 !important; background-color: #eff6ff !important; }
+                        </style>
+                    ''')
+
                     with ui.row().classes('w-full justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100'):
                         with ui.column().classes('gap-0'):
                             ui.label('📝 新建发货单').classes('text-lg font-bold text-gray-800')
                             ui.label('支持手工录入与 Excel 一键回填').classes('text-xs text-gray-500')
                         ui.button(icon='close', on_click=dlg_new_shipment.close).props('flat round dense')
                     
-                    imported_products: list[dict] = []
-                    create_mode = {'value': 'manual'}
+                    # 🧪 全局状态
+                    global_spec_weights = {}  # 动态加载，避免设置页修改后不生效
+                    last_parsed_payload = {}  # 存储最近一次 Excel 解析的完整原始数据，用于还原功能
 
-                    def recalc_imported_rows() -> tuple[int, float, int]:
-                        total_qty = 0
-                        total_kg = 0.0
-                        unmatched = 0
-                        for p in imported_products:
-                            qty = int(p.get('qty', 0) or 0)
-                            unit_w = float(p.get('unit_weight_kg', 0) or 0)
-                            p['line_weight_kg'] = round(unit_w * qty, 3)
-                            total_qty += qty
-                            total_kg += p['line_weight_kg']
-                            if p.get('weight_source') == 'unmatched' and unit_w <= 0:
-                                unmatched += 1
-                        return total_qty, total_kg, unmatched
+
                     
-                    with ui.card().classes('mx-6 mt-4 p-4 bg-gradient-to-br from-slate-50 to-blue-50 border border-blue-100 shadow-sm rounded-xl'):
-                        ui.label('数据录入方式').classes('section-title')
-                        ui.label('推荐：先导入 Excel 自动回填，再快速补全字段').classes('text-xs text-gray-400 mb-3')
-                        mode_tabs = ui.tabs().classes('mode-switch')
-                        with mode_tabs:
-                            manual_tab = ui.tab('✍️ 手工录入')
-                            excel_tab = ui.tab('📑 Excel 导入')
-                        def on_mode_change(e):
-                            selected = getattr(e, 'value', None)
-                            if selected is None and hasattr(e, 'args') and isinstance(e.args, dict):
-                                selected = e.args.get('value')
-                            selected_name = str(selected or '')
-                            create_mode['value'] = 'excel' if ('Excel' in selected_name or 'excel' in selected_name) else 'manual'
-
-                        mode_tabs.on('update:model-value', on_mode_change)
-                        with ui.tab_panels(mode_tabs, value=manual_tab).classes('w-full bg-transparent shadow-none mt-3 fixed-mode-panels'):
-                            with ui.tab_panel(manual_tab).classes('px-0 py-2 h-full'):
-                                with ui.row().classes('mode-card items-center w-full'):
-                                    ui.icon('edit_note', color='blue-6').classes('text-xl')
-                                    ui.label('手工模式：适合临时新增，支持快速填单').classes('text-sm text-blue-900 font-medium')
-                            with ui.tab_panel(excel_tab).classes('px-0 py-2 h-full'):
-                                with ui.row().classes('w-full items-center p-3 bg-blue-50 rounded-lg border border-blue-100 gap-2'):
-                                    ui.icon('upload_file', color='blue-5').classes('text-2xl mr-2')
-                                    ui.label('从客户订单 Excel 导入并自动回填').classes('text-sm font-bold text-blue-800 flex-1')
-                                    import_mode = ui.select(['覆盖', '追加'], value='覆盖', label='导入方式').props('dense outlined').classes('w-28')
-
-                                    async def on_excel_upload(e):
-                                        try:
-                                            import tempfile, os, asyncio
-                                            filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
-                                            suffix = Path(filename).suffix or '.xlsx'
-                                            content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
-                                            if content_io is None: return
-                                            raw = content_io.read()
-                                            if asyncio.iscoroutine(raw): raw = await raw
-                                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                                                tmp.write(raw)
-                                                tmp_path = tmp.name
-
-                                            data = waybill_generator.parse_order_excel(tmp_path)
-                                            os.unlink(tmp_path)
-
-                                            spec_rows = await backend_db.get_all_spec_weights()
-                                            sw = {r['spec']: r['weight_kg'] for r in spec_rows}
-
-                                            customer_input.value = data['receiver_name']
-                                            phone_input.value = data['receiver_phone']
-                                            address_input.value = data['receiver_address']
-                                            province_input.value = data.get('receiver_province', '')
-                                            city_input.value = data.get('receiver_city', '')
-                                            district_input.value = data.get('receiver_district', '')
-
-                                            prods = waybill_generator.enrich_products_with_weight(data.get('products', []), sw)
-                                            if prods:
-                                                product_input.value = '、'.join([p['name'] for p in prods[:3]])
-                                                qty_input.value = sum(p['qty'] for p in prods)
-                                            imported_products.clear()
-                                            imported_products.extend(prods)
-                                            imported_rows_refreshable.refresh()
-                                            ui.notify(f'订单导入成功！识别到 {len(prods)} 个商品', type='positive')
-                                        except Exception as ex:
-                                            ui.notify(f'导入失败：{ex}', type='negative')
-
-                                    ui.upload(on_upload=on_excel_upload, auto_upload=True, label='新增 Excel').props('accept=".xlsx,.xls" color=blue-6 bordered').classes('upload-pill max-w-[360px]')
-                                ui.label('支持 .xlsx / .xls，导入后将自动填充收货人、地址、货品和数量。').classes('text-xs text-blue-700 mt-2')
-
-                    @ui.refreshable
-                    def imported_rows_refreshable():
-                        if not imported_products:
-                            return
-                        total_qty, total_kg, unmatched = recalc_imported_rows()
-                        with ui.column().classes('mx-6 mt-2 p-3 bg-white border border-blue-100 rounded-lg gap-2'):
-                            ui.label(f'导入商品明细：{len(imported_products)} 行 | 总件数 {total_qty} | 总重量 {round(total_kg, 3)}kg').classes('text-xs text-gray-600')
-                            if unmatched:
-                                ui.label(f'⚠️ 仍有 {unmatched} 行规格未匹配，提交前需补全单重').classes('text-xs text-orange-600')
-                            for idx, p in enumerate(imported_products):
-                                with ui.row().classes('w-full items-center gap-2'):
-                                    ui.label(f"{idx+1}. {p.get('name','')}").classes('text-xs w-[260px] truncate')
-                                    ui.input('规格', value=p.get('parsed_spec') or p.get('spec') or '').props('dense readonly').classes('w-28')
-                                    qn = ui.number('数量', value=int(p.get('qty', 0) or 0), min=0, format='%.0f').props('dense').classes('w-20')
-                                    wn = ui.number('单重(kg)', value=float(p.get('unit_weight_kg', 0) or 0), min=0, format='%.3f').props('dense').classes('w-24')
-                                    lw = ui.label(f"行重: {round(float(p.get('line_weight_kg', 0) or 0), 3)}kg").classes('text-xs text-blue-700')
-                                    status_text = '已匹配' if p.get('weight_source') != 'unmatched' or float(p.get('unit_weight_kg', 0) or 0) > 0 else '未匹配'
-                                    ui.label(status_text).classes('text-xs text-green-600' if status_text == '已匹配' else 'text-orange-600')
-
-                                    def _on_qty_change(e, row=p):
-                                        row['qty'] = int(float(e.value or 0))
-                                        row['line_weight_kg'] = round(float(row.get('unit_weight_kg', 0) or 0) * row['qty'], 3)
-                                        imported_rows_refreshable.refresh()
-
-                                    def _on_weight_change(e, row=p):
-                                        row['unit_weight_kg'] = float(e.value or 0)
-                                        row['line_weight_kg'] = round(row['unit_weight_kg'] * int(row.get('qty', 0) or 0), 3)
-                                        row['weight_source'] = 'manual_override' if row['unit_weight_kg'] > 0 else row.get('weight_source', 'unmatched')
-                                        imported_rows_refreshable.refresh()
-
-                                    qn.on('update:model-value', _on_qty_change)
-                                    wn.on('update:model-value', _on_weight_change)
-
-                    imported_rows_refreshable()
                     manual_items: list[dict] = [{'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''}]
+
+                    async def reset_new_shipment_form():
+                        # 🆕 动态加载规格权重
+                        spec_rows_data = await backend_db.get_all_spec_weights()
+                        global_spec_weights.clear()
+                        global_spec_weights.update({r['spec']: r['weight_kg'] for r in spec_rows_data})
+
+                        # 清空商品行
+                        manual_items.clear()
+                        manual_items.append({'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''})
+                        if 'manual_items_refreshable' in locals(): manual_items_refreshable.refresh()
+                        # 🆕 清空还原缓存
+                        last_parsed_payload.clear()
+                        
+                        # 清空输入框
+                        if 'customer_input' in locals():
+                            date_input.value = str(datetime.date.today())
+                            shipper_input.value = '物流部'
+                            customer_input.value = ''
+                            phone_input.value = ''
+                            province_input.value = ''
+                            city_input.value = ''
+                            district_input.value = ''
+                            address_input.value = ''
+                            pickup_method_input.value = '送货上门'
+                            payment_method_input.value = '现付'
+                            new_unit_price.value = 0
+                            new_delivery_fee.value = 0
+                            manual_freight_fee.value = 0
+                            manual_total_weight.value = 0
+                            total_qty_input.value = 1
+                            if 'new_freight_display' in locals():
+                                new_freight_display.text = '→ 托运单运输费: ¥0.00'
+                            if 'upload_status_container' in locals():
+                                upload_status_container.set_visibility(False)
+
+                    def sync_summary_fields():
+                        try:
+                            # 汇总到 Module B 的总数量
+                            total_qty = sum(int(p.get('qty', 0) or 0) for p in manual_items)
+                            if 'total_qty_input' in locals() and total_qty_input:
+                                total_qty_input.value = total_qty
+                            
+                            # 汇总到 Module B 的总重量
+                            total_kg = sum(float(p.get('line_weight_kg', 0) or 0) for p in manual_items)
+                            if 'manual_total_weight' in locals() and manual_total_weight:
+                                manual_total_weight.value = round(total_kg / 1000, 3)
+                            
+                            if 'update_preview_freight' in locals():
+                                update_preview_freight(sync_to_input=True)
+                        except:
+                            pass
 
                     @ui.refreshable
                     def manual_items_refreshable():
-                        with ui.column().classes('w-full gap-2'):
-                            for i, item in enumerate(manual_items):
-                                with ui.row().classes('w-full items-center gap-2'):
-                                    n = ui.input('品名', value=item.get('name', '')).props('outlined dense').classes('flex-1')
-                                    q = ui.number('件数', value=item.get('qty', 1), min=0, format='%.0f').props('outlined dense').classes('w-24')
-                                    w = ui.number('单重(kg)', value=item.get('unit_weight_kg', 0), min=0, format='%.3f').props('outlined dense').classes('w-28')
-                                    s = ui.input('规格').props('outlined dense').classes('w-28')
+                        with ui.scroll_area().classes('w-full max-h-[300px] bg-slate-50 p-1 rounded border'):
+                            # 🆕 添加表头
+                            with ui.row().classes('w-full items-center gap-1 px-1 mb-1'):
+                                ui.label('商品名称').classes('flex-1 text-[10px] text-gray-400 font-bold')
+                                ui.label('规格').classes('w-24 text-[10px] text-gray-400 font-bold text-center')
+                                ui.label('件数').classes('w-16 text-[10px] text-gray-400 font-bold text-center')
+                                ui.label('单重(kg)').classes('w-20 text-[10px] text-gray-400 font-bold text-center')
+                                ui.label('').classes('w-8')
 
-                                    def _n(e, row=item):
-                                        row['name'] = e.value or ''
-                                    def _q(e, row=item):
-                                        row['qty'] = int(float(e.value or 0))
-                                        row['line_weight_kg'] = round(float(row.get('unit_weight_kg', 0) or 0) * row['qty'], 3)
-                                    def _w(e, row=item):
-                                        row['unit_weight_kg'] = float(e.value or 0)
-                                        row['line_weight_kg'] = round(row['unit_weight_kg'] * int(row.get('qty', 0) or 0), 3)
-                                    def _s(e, row=item):
-                                        row['spec'] = e.value or ''
+                            with ui.column().classes('w-full gap-1'):
+                                for i, item in enumerate(manual_items):
+                                    with ui.row().classes('w-full items-center gap-1 bg-white p-0.5 rounded border-b border-gray-50 last:border-0'):
+                                        n = ui.input(value=item.get('name', ''), on_change=lambda e: _n(e.value)).props('outlined dense hide-bottom-space').classes('flex-1 scale-95 origin-left')
+                                        s = ui.input(value=item.get('spec', ''), on_change=lambda e: _s(e.value)).props('outlined dense hide-bottom-space').classes('w-24 scale-95')
+                                        q = ui.number(value=item.get('qty', 1), min=0, format='%.0f', on_change=lambda e: _q(e.value)).props('outlined dense hide-bottom-space').classes('w-16 scale-95')
+                                        w = ui.number(value=item.get('unit_weight_kg', 0), min=0, format='%.3f', on_change=lambda e: _w(e.value)).props('outlined dense hide-bottom-space').classes('w-20 scale-95')
 
-                                    n.on('update:model-value', _n)
-                                    q.on('update:model-value', _q)
-                                    w.on('update:model-value', _w)
-                                    s.on('update:model-value', _s)
+                                        def _n(val, row=item): row['name'] = val or ''
+                                        def _q(val, row=item):
+                                            row['qty'] = int(float(val or 0))
+                                            row['line_weight_kg'] = round(float(row.get('unit_weight_kg', 0) or 0) * row['qty'], 3)
+                                            sync_summary_fields()
+                                        def _w(val, row=item):
+                                            row['unit_weight_kg'] = float(val or 0)
+                                            row['line_weight_kg'] = round(row['unit_weight_kg'] * int(row.get('qty', 0) or 0), 3)
+                                            sync_summary_fields()
+                                        def _s(val, row=item, w_input=w): 
+                                            clean_val = (val or '').strip()
+                                            row['spec'] = clean_val
+                                            # 🆕 实时权重联动：查表并更新单重输入框
+                                            if clean_val in global_spec_weights:
+                                                new_w = global_spec_weights[clean_val]
+                                                row['unit_weight_kg'] = new_w
+                                                w_input.value = new_w  # 强制更新 UI 组件值
+                                                row['line_weight_kg'] = round(new_w * int(row.get('qty', 0) or 0), 3)
+                                                sync_summary_fields()
 
-                                    if len(manual_items) > 1:
-                                        def _rm(row=item):
-                                            manual_items.remove(row)
-                                            manual_items_refreshable.refresh()
-                                        ui.button(icon='delete', on_click=_rm).props('flat round color=red-5')
-                    
-                    with ui.column().classes('px-6 pb-4 gap-3'):
-                        with ui.card().classes('w-full p-4 border shadow-sm'):
+                                        if len(manual_items) > 1:
+                                            def _rm(row=item):
+                                                manual_items.remove(row)
+                                                manual_items_refreshable.refresh()
+                                                sync_summary_fields()
+                                            ui.button(icon='delete', on_click=_rm).props('flat round color=red-5 dense').classes('w-8 scale-75')
+
+                    async def on_excel_upload(e):
+                        try:
+                            import tempfile, os, asyncio
+                            filename = getattr(e, 'name', getattr(e, 'filename', 'order.xlsx'))
+                            suffix = Path(filename).suffix or '.xlsx'
+                            content_io = getattr(e, 'content', None) or getattr(e, 'file', None)
+                            if content_io is None: return
+                            raw = content_io.read()
+                            if hasattr(raw, '__await__'): raw = await raw
+                            
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                                tmp.write(raw)
+                                tmp_path = tmp.name
+
+                            data = waybill_generator.parse_order_excel(tmp_path)
+                            os.unlink(tmp_path)
+
+                            spec_rows = await backend_db.get_all_spec_weights()
+                            sw = {r['spec']: r['weight_kg'] for r in spec_rows}
+
+                            if 'customer_input' in locals():
+                                customer_input.value = data['receiver_name']
+                                phone_input.value = data['receiver_phone']
+                                address_input.value = data['receiver_address']
+                                province_input.value = data.get('receiver_province', '')
+                                city_input.value = data.get('receiver_city', '')
+                                district_input.value = data.get('receiver_district', '')
+
+                            prods = waybill_generator.enrich_products_with_weight(data.get('products', []), sw)
+                            
+                            manual_items.clear()
+                            current_prods_list = []
+                            for p in prods:
+                                row_data = {
+                                    'name': p.get('name', ''),
+                                    'qty': int(p.get('qty', 0) or 0),
+                                    'unit_weight_kg': float(p.get('unit_weight_kg', 0) or 0),
+                                    'line_weight_kg': round(float(p.get('unit_weight_kg', 0) or 0) * int(p.get('qty', 0) or 0), 3),
+                                    'spec': p.get('parsed_spec') or p.get('spec') or '',
+                                }
+                                manual_items.append(row_data)
+                                current_prods_list.append(row_data.copy())
+                            
+                            # 🆕 缓存解析结果，用于后续“还原”
+                            last_parsed_payload['receiver'] = {
+                                'name': data['receiver_name'],
+                                'phone': data['receiver_phone'],
+                                'address': data['receiver_address'],
+                                'province': data.get('receiver_province', ''),
+                                'city': data.get('receiver_city', ''),
+                                'district': data.get('receiver_district', ''),
+                            }
+                            last_parsed_payload['products'] = current_prods_list
+                            last_parsed_payload['filename'] = filename
+                            
+                            manual_items_refreshable.refresh()
+                            sync_summary_fields()
+                            
+                            try:
+                                matched_price = freight_calc.lookup_unit_price(province_input.value, city_input.value, district_input.value)
+                                if matched_price is not None:
+                                    new_unit_price.value = float(matched_price)
+                            except: pass
+                            
+                            if 'update_preview_freight' in locals():
+                                update_preview_freight(sync_to_input=True)
+                                
+                            ui.notify(f'订单导入成功！已加载 {len(manual_items)} 行商品数据', type='positive')
+                            if 'status_label' in locals():
+                                status_label.set_text(f"已加载: {filename} ({len(manual_items)}行)")
+                                upload_status_container.set_visibility(True)
+                        except Exception as ex:
+                            import traceback
+                            traceback.print_exc()
+                            ui.notify(f'导入失败：{ex}', type='negative')
+
+                    with ui.column().classes('px-3 pb-4 gap-3'):
+                        # 🆕 数据录入区紧凑重构 (Excel 导入)
+                        with ui.card().classes('w-full p-4 bg-slate-50 border-2 border-dashed border-blue-200 rounded-xl shadow-none mb-1'):
+                            with ui.row().classes('w-full items-center justify-between gap-4'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('cloud_upload', color='blue-500', size='24px')
+                                    with ui.column().classes('gap-0'):
+                                        ui.label('Excel 导入').classes('text-sm font-bold text-slate-700')
+                                        ui.label('支持 .xlsx / .xls，自动识别信息').classes('text-[10px] text-slate-400')
+                                
+                                with ui.row().classes('items-center gap-2 relative'):
+                                    # 真正的上传器：覆盖整个区域，捕获点击和拖拽
+                                    uploader = ui.upload(on_upload=on_excel_upload, auto_upload=True) \
+                                        .props('accept=".xlsx,.xls" flat hide-upload-list') \
+                                        .classes('hide-uploader-ui absolute inset-0 opacity-0 z-10 cursor-pointer')
+                                    # 明确绑定点击事件触发文件选择器 (Scheme A Enhanced Fix)
+                                    uploader.on('click', lambda: uploader.run_method('pickFiles'))
+                                    
+                                    # 视觉层：用户看到的按钮 (z-0)
+                                    with ui.row().classes('items-center bg-blue-50 hover:bg-blue-100 transition-colors rounded-full px-4 py-1.5 border border-blue-200 gap-2 shrink-0'):
+                                        ui.icon('add_circle', color='blue-600', size='18px')
+                                        ui.label('点击选择或拖拽至此').classes('text-xs text-blue-700 font-bold')
+
+                            # 🆕 状态反馈区 (绿色胶囊样式)
+                            upload_status_container = ui.row().classes('w-full mt-3 items-center gap-2 px-3 py-1.5 bg-green-50 rounded-full border border-green-200')
+                            upload_status_container.set_visibility(False)
+                            with upload_status_container:
+                                ui.icon('check_circle', color='green-500', size='18px')
+                                status_label = ui.label('').classes('text-[11px] text-green-700 font-bold')
+                                
+                                # 🆕 还原初始值功能
+                                def restore_original_data():
+                                    if not last_parsed_payload: 
+                                        ui.notify('没有可还原的 Excel 数据', type='warning')
+                                        return
+                                    rec = last_parsed_payload.get('receiver', {})
+                                    customer_input.value = rec['name']
+                                    phone_input.value = rec['phone']
+                                    address_input.value = rec['address']
+                                    province_input.value = rec['province']
+                                    city_input.value = rec['city']
+                                    district_input.value = rec['district']
+                                    
+                                    manual_items.clear()
+                                    for p in last_parsed_payload.get('products', []):
+                                        manual_items.append(p.copy())
+                                    
+                                    manual_items_refreshable.refresh()
+                                    sync_summary_fields()
+                                    ui.notify('已还原至 Excel 初始解析值', type='info')
+
+                                ui.button('🔄 还原初始值', on_click=restore_original_data).props('flat dense color=green-6 no-caps text-xs').classes('ml-2')
+                                ui.button(icon='close', on_click=lambda: upload_status_container.set_visibility(False)).props('flat round dense color=grey-4').classes('ml-auto size-xs')
+
+
+
+
+                        with ui.card().classes('w-full p-3 border shadow-sm'):
                             ui.label('模块A：基础与物流信息').classes('section-title')
-                            with ui.grid(columns=2).classes('w-full gap-2'):
+                            with ui.grid(columns=4).classes('w-full gap-2'):
                                 date_input = ui.input('接单日期', value=str(datetime.date.today())).props('outlined dense')
                                 shipper_input = ui.input('托运人(发货方)', value='物流部').props('outlined dense')
                                 customer_input = ui.input('收货人*').props('outlined dense')
@@ -556,33 +659,73 @@ async def shipments_content():
                                 province_input = ui.input('省份').props('outlined dense')
                                 city_input = ui.input('城市').props('outlined dense')
                                 district_input = ui.input('区/县').props('outlined dense')
-                                address_input = ui.input('目的地/详细地址*').props('outlined dense').classes('col-span-2')
+                                address_input = ui.input('目的地/详细地址*').props('outlined dense').classes('col-span-4')
 
-                        with ui.card().classes('w-full p-4 border shadow-sm'):
+                        with ui.card().classes('w-full p-3 border shadow-sm'):
                             ui.label('模块B：财务与交接要求').classes('section-title')
-                            with ui.grid(columns=2).classes('w-full gap-2'):
+                            with ui.grid(columns=4).classes('w-full gap-2'):
                                 pickup_method_input = ui.select(['送货上门', '客户自提'], value='送货上门', label='交接方式').props('outlined dense')
                                 payment_method_input = ui.select(['现付', '到付', '月结'], value='现付', label='付款方式').props('outlined dense')
-                                cod_input = ui.number('代收货款', value=0, min=0, format='%.2f').props('outlined dense')
-                                receipt_req_input = ui.select(['不要求', '电子回单', '纸质回单'], value='不要求', label='回单要求').props('outlined dense')
-                                new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense')
+                                total_qty_input = ui.number('总数量(件)(自动汇总)', value=1, format='%.0f').props('outlined dense readonly bg-blue-50')
+                                new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense input-class="text-blue-600 font-bold"')
                                 new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').props('outlined dense')
-                                manual_freight_fee = ui.number('托运单运输费(>8吨手填)', value=0, min=0, format='%.2f').props('outlined dense')
-                            manual_total_weight = ui.number('手工总重量(吨)', value=0, min=0, format='%.3f').props('outlined dense').classes('w-full mt-2')
+                                manual_total_weight = ui.number('总重量(吨)(预估/实填)', value=0, min=0, format='%.3f').props('outlined dense input-class="text-blue-600 font-bold"')
+                                manual_freight_fee = ui.number('托运单运输费(预估/实填)', value=0, min=0, format='%.2f').props('outlined dense input-class="text-blue-600 font-bold"')
 
-                        with ui.card().classes('w-full p-4 border shadow-sm'):
+                        with ui.card().classes('w-full p-2 border shadow-sm'):
                             ui.label('模块C：商品明细清单').classes('section-title')
-                            product_input = ui.input('货物品类汇总*').props('outlined dense').classes('w-full mb-2')
-                            qty_input = ui.number('数量汇总(件)*', value=1, min=1, format='%.0f').props('outlined dense').classes('w-48 mb-2')
+                            
                             manual_items_refreshable()
                             def add_manual_item():
                                 manual_items.append({'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''})
                                 manual_items_refreshable.refresh()
-                            ui.button('➕ 新增商品行', on_click=add_manual_item, color='primary').props('outline')
+                                sync_summary_fields()
+                            ui.button('➕ 新增商品行', on_click=add_manual_item, color='primary').props('outline dense').classes('mt-2')
 
                         with ui.row().classes('w-full items-center justify-between gap-2 p-2 rounded-lg bg-white border border-blue-100'):
                             new_freight_display = ui.label('→ 托运单运输费: ¥0.00').classes('text-sm font-bold text-blue-700')
                             ui.label('业务模式将在后续【分配物流】自动判定（整车/零单）').classes('text-xs text-gray-500 text-right')
+                        
+                        # 🆕 实时更新运费预览逻辑 (支持回填)
+                        def update_preview_freight(sync_to_input=False):
+                            # 核心修复：优先从“实填”框读取总重量，而非导入明细
+                            total_w_ton = float(manual_total_weight.value or 0)
+                            
+                            up = float(new_unit_price.value or 0)
+                            df = float(new_delivery_fee.value or 0)
+                            
+                            # 按照阶梯公式计算自动预估值
+                            auto_calc_val = freight_calc.calc_freight(total_w_ton, '零单', up, df)
+                            
+                            # 当重量达到 8 吨时，开启“请人工填写”模式
+                            is_manual_threshold = total_w_ton >= 8.0
+
+                            # 🆕 逻辑优化：一旦超过 8 吨，同步清空运费框（显示为 0），由用户手工填入
+                            if is_manual_threshold and sync_to_input:
+                                manual_freight_fee.value = 0
+
+                            # 如果需要同步（如导入或单价变动时），且未达到人工阈值，则更新输入框
+                            if sync_to_input and not is_manual_threshold:
+                                manual_freight_fee.value = auto_calc_val
+
+                            # 预览显示始终以输入框的“实填”值为准
+                            current_val = float(manual_freight_fee.value or 0)
+                            
+                            if is_manual_threshold:
+                                # >= 8吨 重点变色提醒
+                                new_freight_display.text = f'→ 托运单运输费: ¥{current_val:,.2f} (请人工填写)'
+                                new_freight_display.classes(replace='text-blue-700 text-orange-700')
+                            else:
+                                new_freight_display.text = f'→ 托运单运输费: ¥{current_val:,.2f}'
+                                new_freight_display.classes(replace='text-orange-700 text-blue-700')
+
+                        new_unit_price.on('update:model-value', lambda: update_preview_freight(sync_to_input=True))
+                        new_delivery_fee.on('update:model-value', lambda: update_preview_freight(sync_to_input=True))
+                        manual_total_weight.on('update:model-value', lambda: update_preview_freight(sync_to_input=True))
+                        manual_freight_fee.on('update:model-value', lambda: update_preview_freight(sync_to_input=False))
+                        
+                        # 初始调用一次
+                        update_preview_freight()
                     
                     async def submit_shipment():
                         if not customer_input.value or not address_input.value:
@@ -591,43 +734,28 @@ async def shipments_content():
                         spec_rows = await backend_db.get_all_spec_weights()
                         sw = {r['spec']: r['weight_kg'] for r in spec_rows}
 
-                        if imported_products:
-                            prods = waybill_generator.enrich_products_with_weight(imported_products, sw)
-                            unmatched = [p for p in prods if float(p.get('unit_weight_kg', 0) or 0) <= 0]
-                            if unmatched:
-                                ui.notify(f'存在 {len(unmatched)} 行未匹配规格或单重为0，不允许提交', type='negative')
-                                return
-                            total_qty = sum(int(p.get('qty', 0) or 0) for p in prods)
-                            total_weight_t = round(sum(float(p.get('line_weight_kg', 0) or 0) for p in prods) / 1000, 3)
-                        else:
-                            typed_rows = [r for r in manual_items if (r.get('name') or '').strip()]
-                            if typed_rows:
-                                prods = [{
-                                    'name': r.get('name', ''),
-                                    'spec': r.get('spec', ''),
-                                    'qty': int(r.get('qty', 0) or 0),
-                                    'parsed_spec': '',
-                                    'unit_weight_kg': float(r.get('unit_weight_kg', 0) or 0),
-                                    'line_weight_kg': round(float(r.get('unit_weight_kg', 0) or 0) * int(r.get('qty', 0) or 0), 3),
-                                    'weight_source': 'manual_input',
-                                    'weight_locked': 1,
-                                } for r in typed_rows]
-                            else:
-                                prods = [{
-                                    'name': product_input.value,
-                                    'spec': '',
-                                    'qty': int(qty_input.value),
-                                    'parsed_spec': '',
-                                    'unit_weight_kg': round((float(manual_total_weight.value or 0) * 1000) / max(int(qty_input.value or 1), 1), 3),
-                                    'line_weight_kg': round(float(manual_total_weight.value or 0) * 1000, 3),
-                                    'weight_source': 'manual_input',
-                                    'weight_locked': 1,
-                                }]
-                            total_qty = sum(int(p.get('qty', 0) or 0) for p in prods)
-                            total_weight_t = float(manual_total_weight.value or 0)
-                            if not product_input.value:
-                                product_input.value = '、'.join([p['name'] for p in prods[:3]])
-                            qty_input.value = total_qty
+                        # 🆕 统一处理商品行数据
+                        typed_rows = [r for r in manual_items if (r.get('name') or '').strip()]
+                        if not typed_rows:
+                            ui.notify('请至少填写一行商品明细', type='warning')
+                            return
+                            
+                        prods = [{
+                            'name': r.get('name', ''),
+                            'spec': r.get('spec', ''),
+                            'qty': int(r.get('qty', 0) or 0),
+                            'parsed_spec': '',
+                            'unit_weight_kg': float(r.get('unit_weight_kg', 0) or 0),
+                            'line_weight_kg': round(float(r.get('unit_weight_kg', 0) or 0) * int(r.get('qty', 0) or 0), 3),
+                            'weight_source': 'manual_input',
+                            'weight_locked': 1,
+                        } for r in typed_rows]
+                        
+                        total_qty = sum(int(p.get('qty', 0) or 0) for p in prods)
+                        # 自动生成货物品类汇总 (取前 3 个品名)
+                        summary_product_name = '、'.join([p['name'] for p in prods[:3]])
+                        if len(prods) > 3:
+                            summary_product_name += f' 等 {len(prods)} 项'
                         # 公式: 托运单运输费 = 总重量 * 单价 + 运送费
                         up = float(new_unit_price.value or 0)
                         df = float(new_delivery_fee.value or 0)
@@ -650,21 +778,24 @@ async def shipments_content():
                             new_unit_price.value = up
                             unit_price_source = 'district_match'
                         
-                        if total_weight_t > 8:
-                            freight_fee = float(manual_freight_fee.value or 0)
-                            if freight_fee <= 0:
-                                ui.notify('总重量超过8吨，托运单运输费需手动填写且大于0', type='warning')
-                                return
-                            freight_fee_mode = 'manual'
-                        else:
-                            freight_fee = round(total_weight_t * up + df, 2)
+                        # 核心：使用“预估/实填”框中的值作为最终存入数据库的值
+                        total_weight_t = float(manual_total_weight.value or 0)
+                        freight_fee = float(manual_freight_fee.value or 0)
+                        
+                        # 判定计费模式
+                        # 核心逻辑：如果重量 >= 8 吨，或者实填值与阶梯公式计算值不符，则标记为 manual
+                        expected_auto = freight_calc.calc_freight(total_weight_t, '零单', up, df)
+                        
+                        if total_weight_t < 8.0 and abs(freight_fee - expected_auto) < 0.01:
                             freight_fee_mode = 'auto'
+                        else:
+                            freight_fee_mode = 'manual'
                         
                         new_sid = await backend_db.create_order_with_items(
                             {
                                 'customer_name': customer_input.value,
-                                'product_name': product_input.value,
-                                'quantity': int(qty_input.value),
+                                'product_name': summary_product_name,
+                                'quantity': total_qty,
                                 'delivery_address': address_input.value,
                                 'receiver_province': province_val,
                                 'receiver_city': city_val,
@@ -681,8 +812,8 @@ async def shipments_content():
                                 'payment_method': payment_method_input.value,
                                 'order_date': date_input.value,
                                 'shipper_name': shipper_input.value,
-                                'cod_amount': cod_input.value,
-                                'receipt_requirement': receipt_req_input.value,
+                                'cod_amount':  0,
+                                'receipt_requirement': '不要求', # 移除 UI 后默认不要求
                             },
                             prods,
                         )
@@ -698,21 +829,19 @@ async def shipments_content():
                         new_delivery_fee.value = 0
                         manual_freight_fee.value = 0
                         manual_total_weight.value = 0
-                        cod_input.value = 0
+                        total_qty_input.value = 1
                         new_freight_display.text = '→ 托运单运输费: ¥0.00'
-                        imported_products.clear()
                         manual_items.clear()
                         manual_items.append({'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''})
                         manual_items_refreshable.refresh()
-                        imported_rows_refreshable.refresh()
                         dlg_new_shipment.close()
                         list_refreshable.refresh()
 
-                    with ui.row().classes('w-full justify-end items-center gap-3 mt-6 px-6 py-4 bg-white border-t border-gray-100'):
+                    with ui.row().classes('w-full justify-end items-center gap-3 mt-6 px-4 py-4 bg-white border-t border-gray-100'):
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('🚀 确认创建订单', on_click=submit_shipment, color='primary')
                 
-                ui.button('新建发货单', icon='add', on_click=dlg_new_shipment.open).classes('bg-primary text-white font-bold')
+                ui.button('新建发货单', icon='add', on_click=lambda: (reset_new_shipment_form(), dlg_new_shipment.open())).classes('bg-primary text-white font-bold')
 
             # ── 调度总台账 ──
             with ui.card().classes('modern-card w-full p-0 overflow-hidden'):
@@ -797,6 +926,7 @@ async def shipments_content():
                     
                     edit_customer = ui.input('客户名称*').classes('w-full mb-2')
                     edit_product = ui.input('货物品类*').classes('w-full mb-2')
+                    edit_spec = ui.input('规格').classes('w-full mb-2')
                     edit_qty = ui.number('数量(件)*', min=1, format='%.0f').classes('w-full mb-2')
                     edit_address = ui.input('收货详细地址*').classes('w-full mb-2')
                     
@@ -857,6 +987,7 @@ async def shipments_content():
                             provider = edit_selector['get_value']()
                             inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
 
+                        # 🆕 更新主表
                         await backend_db.update_shipment_info(
                             curr_sid.text, edit_customer.value, edit_product.value, 
                             int(edit_qty.value), edit_address.value, inferred_mode,
@@ -865,6 +996,14 @@ async def shipments_content():
                             delivery_fee=df, freight_fee=freight_fee,
                             freight_fee_mode=freight_fee_mode, unit_price_source=unit_price_source,
                         )
+                        # 🆕 同步更新明细子表 (单品模式)
+                        prods_to_save = [{
+                            'name': edit_product.value,
+                            'spec': edit_spec.value or '',
+                            'qty': int(edit_qty.value),
+                            'unit_weight_kg': (total_weight_t * 1000 / int(edit_qty.value)) if int(edit_qty.value) > 0 else 0
+                        }]
+                        await backend_db.save_shipment_products(curr_sid.text, prods_to_save)
                         if provider:
                             await ensure_logistics_option(provider)
                             await backend_db.set_shipment_logistics_provider(curr_sid.text, provider)
@@ -1211,6 +1350,13 @@ async def shipments_content():
                             edit_customer.value = row['customer_name']
                             edit_product.value = row['product_name']
                             edit_qty.value = row['quantity']
+                            # 🆕 异步加载明细表中的规格
+                            async def _load_spec():
+                                p_list = await backend_db.get_shipment_products(row['shipment_id'])
+                                if p_list: edit_spec.value = p_list[0].get('spec', '')
+                                else: edit_spec.value = ''
+                            ui.timer(0, _load_spec, once=True)
+
                             edit_address.value = row['delivery_address']
                             current_edit_ship_type['value'] = row.get('ship_type', '待分配')
                             provider = (row.get('logistics_provider') or '').strip()
@@ -1441,7 +1587,8 @@ async def main_page():
                 'weight_source': r.get('weight_source', 'manual_override'),
             })
 
-        pending_edits: dict[int, dict] = {}
+        _page_ctx['detail_pending_edits'] = _page_ctx.get('detail_pending_edits', {})
+        pending_edits = _page_ctx['detail_pending_edits']
 
         def patch_row(row_id: int, key: str, value):
             target = next((x for x in editable_rows if int(x.get('id') or 0) == int(row_id)), None)
@@ -1501,12 +1648,12 @@ async def main_page():
                 else:
                     cols = [
                         {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
-                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
                         {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
+                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
                         {'name': 'parsed_spec', 'label': '解析规格', 'field': 'parsed_spec', 'align': 'center'},
                         {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
                         {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
-                        {'name': 'weight_source', 'label': '计费方式', 'field': 'weight_source', 'align': 'center'},
+                        {'name': 'weight_source', 'label': '计费方', 'field': 'weight_source', 'align': 'center'},
                     ]
                     ui.label(f'共 {len(editable_rows)} 条商品记录（可行内编辑）').classes('text-sm text-gray-500 mb-2')
                     with ui.table(columns=cols, rows=editable_rows, row_key='id').classes('w-full') as editable_table:
@@ -1516,13 +1663,13 @@ async def main_page():
                                     <q-input dense borderless v-model="props.row.product_name"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'product_name', value: $event})" />
                                 </q-td>
-                                <q-td key="quantity" :props="props">
-                                    <q-input dense borderless type="number" v-model.number="props.row.quantity"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event})" />
-                                </q-td>
                                 <q-td key="spec" :props="props">
                                     <q-input dense borderless v-model="props.row.spec"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'spec', value: $event})" />
+                                </q-td>
+                                <q-td key="quantity" :props="props">
+                                    <q-input dense borderless type="number" v-model.number="props.row.quantity"
+                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event})" />
                                 </q-td>
                                 <q-td key="parsed_spec" :props="props">
                                     <q-input dense borderless v-model="props.row.parsed_spec"
@@ -1558,7 +1705,9 @@ async def main_page():
                             save_btn.props(add='loading')
                             try:
                                 await backend_db.update_order_item_batch(list(pending_edits.values()))
-                                ui.notify('修改成功', type='positive', position='top')
+                                # 🆕 批量更新后立即重算主表总重和运费
+                                await backend_db.recalc_shipment_weight_and_fee(sid)
+                                ui.notify('修改成功并已刷新总重/运费', type='positive', position='top')
                                 pending_edits.clear()
                                 detail_view_refreshable.refresh()
                                 shipments_refresh = _page_ctx.get('shipments_refresh')
