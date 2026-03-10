@@ -138,6 +138,11 @@ async def create_shipment(
     unit_price: float = 0.0,
     delivery_fee: float = 0.0,
     freight_fee: float = 0.0,
+    receiver_province: str = '',
+    receiver_city: str = '',
+    receiver_district: str = '',
+    freight_fee_mode: str = 'auto',
+    unit_price_source: str = 'manual_input',
 ) -> str:
     """
     新建发货单（脱离 orders 表独立运行）。
@@ -156,13 +161,17 @@ async def create_shipment(
                (shipment_id, order_id, ship_type, status,
                 customer_name, delivery_address, product_name, quantity,
                 driver_token, customer_phone,
-                total_weight, unit_price, delivery_fee, freight_fee)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                total_weight, unit_price, delivery_fee, freight_fee,
+                receiver_province, receiver_city, receiver_district,
+                freight_fee_mode, unit_price_source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 shipment_id, order_id, ship_type, status,
                 customer_name, delivery_address, product_name, quantity,
                 token, customer_phone,
-                total_weight, unit_price, delivery_fee, freight_fee
+                total_weight, unit_price, delivery_fee, freight_fee,
+                receiver_province, receiver_city, receiver_district,
+                freight_fee_mode, unit_price_source,
             ),
         )
         await conn.commit()
@@ -191,6 +200,11 @@ async def create_order_with_items(
     unit_price = float(order_payload.get('unit_price', 0) or 0)
     delivery_fee = float(order_payload.get('delivery_fee', 0) or 0)
     freight_fee = float(order_payload.get('freight_fee', 0) or 0)
+    receiver_province = order_payload.get('receiver_province', '')
+    receiver_city = order_payload.get('receiver_city', '')
+    receiver_district = order_payload.get('receiver_district', '')
+    freight_fee_mode = order_payload.get('freight_fee_mode', 'auto')
+    unit_price_source = order_payload.get('unit_price_source', 'manual_input')
 
     async with get_conn() as conn:
         await conn.execute('BEGIN TRANSACTION')
@@ -200,13 +214,17 @@ async def create_order_with_items(
                    (shipment_id, order_id, ship_type, status,
                     customer_name, delivery_address, product_name, quantity,
                     driver_token, customer_phone, pickup_method, payment_method,
-                    total_weight, unit_price, delivery_fee, freight_fee)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    total_weight, unit_price, delivery_fee, freight_fee,
+                    receiver_province, receiver_city, receiver_district,
+                    freight_fee_mode, unit_price_source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     shipment_id, order_id, ship_type, status,
                     customer_name, delivery_address, product_name, quantity,
                     token, customer_phone, pickup_method, payment_method,
                     total_weight, unit_price, delivery_fee, freight_fee,
+                    receiver_province, receiver_city, receiver_district,
+                    freight_fee_mode, unit_price_source,
                 ),
             )
 
@@ -257,6 +275,11 @@ async def update_shipment_info(
     unit_price: float = 0.0,
     delivery_fee: float = 0.0,
     freight_fee: float = 0.0,
+    receiver_province: str = '',
+    receiver_city: str = '',
+    receiver_district: str = '',
+    freight_fee_mode: str = 'auto',
+    unit_price_source: str = 'manual_input',
 ) -> None:
     """编辑未发货的发货单基础信息，包含业务模式的切换及打单配置的更新"""
     async with get_conn() as conn:
@@ -283,12 +306,17 @@ async def update_shipment_info(
                    ship_type=?, driver_token=?, {set_status_snippet}
                    pickup_method=?, payment_method=?, customer_phone=?,
                    total_weight=?, unit_price=?, delivery_fee=?, freight_fee=?,
+                   receiver_province=?, receiver_city=?, receiver_district=?,
+                   freight_fee_mode=?, unit_price_source=?,
                    driver_name=NULL, driver_id_card=NULL, driver_phone=NULL, truck_plate=NULL, truck_type=NULL,
                    third_party_company=NULL, third_party_tracking=NULL, batch_id=NULL
                WHERE shipment_id=? AND status IN ('未订车', '已订车')""",
             (customer_name, product_name, quantity, delivery_address, ship_type, token,
              pickup_method, payment_method, customer_phone,
-             total_weight, unit_price, delivery_fee, freight_fee, shipment_id),
+             total_weight, unit_price, delivery_fee, freight_fee,
+             receiver_province, receiver_city, receiver_district,
+             freight_fee_mode, unit_price_source,
+             shipment_id),
         )
         await conn.commit()
 
@@ -642,7 +670,7 @@ async def recalc_shipment_weight_and_fee(shipment_id: str) -> None:
             total_kg = float(row['total_kg'] or 0)
 
         async with conn.execute(
-            "SELECT unit_price, delivery_fee FROM shipments WHERE shipment_id = ?",
+            "SELECT unit_price, delivery_fee, freight_fee_mode, freight_fee FROM shipments WHERE shipment_id = ?",
             (shipment_id,),
         ) as cur:
             ship = await cur.fetchone()
@@ -650,13 +678,21 @@ async def recalc_shipment_weight_and_fee(shipment_id: str) -> None:
                 return
             unit_price = float(ship['unit_price'] or 0)
             delivery_fee = float(ship['delivery_fee'] or 0)
+            freight_fee_mode = (ship['freight_fee_mode'] or 'auto').strip() or 'auto'
+            current_fee = float(ship['freight_fee'] or 0)
 
         total_weight_t = round(total_kg / 1000, 3)
-        freight_fee = round(total_weight_t * unit_price + delivery_fee, 2)
-        await conn.execute(
-            "UPDATE shipments SET total_weight = ?, freight_fee = ? WHERE shipment_id = ?",
-            (total_weight_t, freight_fee, shipment_id),
-        )
+        if total_weight_t > 8 and freight_fee_mode == 'manual':
+            await conn.execute(
+                "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
+                (total_weight_t, current_fee, 'manual', shipment_id),
+            )
+        else:
+            freight_fee = round(total_weight_t * unit_price + delivery_fee, 2)
+            await conn.execute(
+                "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
+                (total_weight_t, freight_fee, 'auto', shipment_id),
+            )
         await conn.commit()
 
 

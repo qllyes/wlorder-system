@@ -459,6 +459,9 @@ async def shipments_content():
                                             customer_input.value = data['receiver_name']
                                             phone_input.value = data['receiver_phone']
                                             address_input.value = data['receiver_address']
+                                            province_input.value = data.get('receiver_province', '')
+                                            city_input.value = data.get('receiver_city', '')
+                                            district_input.value = data.get('receiver_district', '')
 
                                             prods = waybill_generator.enrich_products_with_weight(data.get('products', []), sw)
                                             if prods:
@@ -550,6 +553,9 @@ async def shipments_content():
                                 shipper_input = ui.input('托运人(发货方)', value='物流部').props('outlined dense')
                                 customer_input = ui.input('收货人*').props('outlined dense')
                                 phone_input = ui.input('收货电话').props('outlined dense')
+                                province_input = ui.input('省份').props('outlined dense')
+                                city_input = ui.input('城市').props('outlined dense')
+                                district_input = ui.input('区/县').props('outlined dense')
                                 address_input = ui.input('目的地/详细地址*').props('outlined dense').classes('col-span-2')
 
                         with ui.card().classes('w-full p-4 border shadow-sm'):
@@ -561,6 +567,7 @@ async def shipments_content():
                                 receipt_req_input = ui.select(['不要求', '电子回单', '纸质回单'], value='不要求', label='回单要求').props('outlined dense')
                                 new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense')
                                 new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').props('outlined dense')
+                                manual_freight_fee = ui.number('托运单运输费(>8吨手填)', value=0, min=0, format='%.2f').props('outlined dense')
                             manual_total_weight = ui.number('手工总重量(吨)', value=0, min=0, format='%.3f').props('outlined dense').classes('w-full mt-2')
 
                         with ui.card().classes('w-full p-4 border shadow-sm'):
@@ -624,7 +631,31 @@ async def shipments_content():
                         # 公式: 托运单运输费 = 总重量 * 单价 + 运送费
                         up = float(new_unit_price.value or 0)
                         df = float(new_delivery_fee.value or 0)
-                        freight_fee = round(total_weight_t * up + df, 2)
+                        parsed_addr = waybill_generator.parse_cn_address(address_input.value)
+                        province_val = province_input.value or parsed_addr.get('province', '')
+                        city_val = city_input.value or parsed_addr.get('city', '')
+                        district_val = district_input.value or parsed_addr.get('district', '')
+                        try:
+                            matched_price = freight_calc.lookup_unit_price(province_val, city_val, district_val)
+                        except Exception as ex:
+                            ui.notify(f'单价表匹配失败，将使用手工单价：{ex}', type='warning')
+                            matched_price = None
+                        unit_price_source = 'manual_input'
+                        if matched_price is not None:
+                            up = float(matched_price)
+                            new_unit_price.value = up
+                            unit_price_source = 'district_match'
+
+                        freight_fee_mode = 'auto'
+                        if total_weight_t > 8:
+                            freight_fee = float(manual_freight_fee.value or 0)
+                            if freight_fee <= 0:
+                                ui.notify('总重量超过8吨，托运单运输费需手动填写且大于0', type='warning')
+                                return
+                            freight_fee_mode = 'manual'
+                        else:
+                            freight_fee = round(total_weight_t * up + df, 2)
+                            freight_fee_mode = 'auto'
                         
                         new_sid = await backend_db.create_order_with_items(
                             {
@@ -632,12 +663,17 @@ async def shipments_content():
                                 'product_name': product_input.value,
                                 'quantity': int(qty_input.value),
                                 'delivery_address': address_input.value,
+                                'receiver_province': province_val,
+                                'receiver_city': city_val,
+                                'receiver_district': district_val,
                                 'ship_type': '待分配',
                                 'customer_phone': phone_input.value,
                                 'total_weight': total_weight_t,
                                 'unit_price': up,
                                 'delivery_fee': df,
                                 'freight_fee': freight_fee,
+                                'freight_fee_mode': freight_fee_mode,
+                                'unit_price_source': unit_price_source,
                                 'pickup_method': pickup_method_input.value,
                                 'payment_method': payment_method_input.value,
                                 'order_date': date_input.value,
@@ -651,9 +687,13 @@ async def shipments_content():
                         ui.notify(f'发货单已生成 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         customer_input.value = ''
                         phone_input.value = ''
+                        province_input.value = ''
+                        city_input.value = ''
+                        district_input.value = ''
                         address_input.value = ''
                         new_unit_price.value = 0
                         new_delivery_fee.value = 0
+                        manual_freight_fee.value = 0
                         manual_total_weight.value = 0
                         cod_input.value = 0
                         new_freight_display.text = '→ 托运单运输费: ¥0.00'
@@ -765,6 +805,7 @@ async def shipments_content():
                     with ui.row().classes('w-full gap-2 mb-2'):
                         edit_unit_price = ui.number('单价(元/吨)', value=0, min=0, format='%.2f').classes('flex-1')
                         edit_delivery = ui.number('运送费(元)', value=0, min=0, format='%.2f').classes('flex-1')
+                    edit_manual_freight = ui.number('托运单运输费(>8吨手填)', value=0, min=0, format='%.2f').classes('w-full mb-3')
                         
                     ui.separator().classes('my-4')
                     ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
@@ -782,7 +823,30 @@ async def shipments_content():
                         _, total_weight_t = waybill_generator.calc_total_weight(prods, sw)
                         up = float(edit_unit_price.value or 0)
                         df = float(edit_delivery.value or 0)
-                        freight_fee = round(total_weight_t * up + df, 2)
+                        parsed_addr = waybill_generator.parse_cn_address(edit_address.value)
+                        try:
+                            matched_price = freight_calc.lookup_unit_price(
+                                parsed_addr.get('province', ''),
+                                parsed_addr.get('city', ''),
+                                parsed_addr.get('district', ''),
+                            )
+                        except Exception as ex:
+                            ui.notify(f'单价表匹配失败，将使用手工单价：{ex}', type='warning')
+                            matched_price = None
+                        unit_price_source = 'manual_input'
+                        if matched_price is not None:
+                            up = float(matched_price)
+                            edit_unit_price.value = up
+                            unit_price_source = 'district_match'
+                        if total_weight_t > 8:
+                            freight_fee = float(edit_manual_freight.value or 0)
+                            if freight_fee <= 0:
+                                ui.notify('总重量超过8吨，托运单运输费需手动填写且大于0', type='warning')
+                                return
+                            freight_fee_mode = 'manual'
+                        else:
+                            freight_fee = round(total_weight_t * up + df, 2)
+                            freight_fee_mode = 'auto'
                         
                         provider = current_edit_logistics['value']
                         inferred_mode = current_edit_ship_type['value']
@@ -796,6 +860,7 @@ async def shipments_content():
                             edit_pickup.value, edit_payment.value,
                             total_weight=total_weight_t, unit_price=up,
                             delivery_fee=df, freight_fee=freight_fee,
+                            freight_fee_mode=freight_fee_mode, unit_price_source=unit_price_source,
                         )
                         if provider:
                             await ensure_logistics_option(provider)
@@ -1159,6 +1224,7 @@ async def shipments_content():
                             edit_payment.value = row.get('payment_method', '现付')
                             edit_unit_price.value = row.get('unit_price', 0)
                             edit_delivery.value = row.get('delivery_fee', 0)
+                            edit_manual_freight.value = row.get('freight_fee', 0)
                             dlg_edit.open()
                             
                         def handle_cancel_shipment(e):
