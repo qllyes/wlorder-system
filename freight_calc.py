@@ -15,7 +15,7 @@ from typing import Optional
 import pandas as pd
 
 # 单价表文件路径（与项目同目录）
-_FREIGHT_TABLE_PATH = Path(__file__).parent / "单价表.xlsx"
+_FREIGHT_TABLE_PATH = Path(__file__).parent / "2025年内表 - .xlsx"
 
 # 默认包装规格单重（kg/件），可在系统设置中覆盖
 DEFAULT_SPEC_WEIGHTS: dict[str, float] = {
@@ -70,10 +70,9 @@ def lookup_unit_price(
     """
     从内表中查询目的地运价（元/吨）。
 
-    查询策略（逐级降级）：
+    查询策略：
       1. 全匹配：省 + 地级市 + 区县
-      2. 省 + 地级市（忽略区县）
-      3. 省（模糊兜底）
+      2. 仅匹配：区县（当全匹配失败时，尝试仅按区县名查询）
     返回 None 表示未查到，由调用方提示用户手动输入。
     """
     df = load_freight_table()
@@ -99,16 +98,13 @@ def lookup_unit_price(
         if result is not None:
             return result
 
-    # 2. 省 + 市
-    result = _first(
-        (df["省份"] == province.strip())
-        & (df["地级市"] == city.strip())
-    )
-    if result is not None:
-        return result
+    # 2. 仅按区县匹配
+    if district:
+        result = _first(df["区县"] == district.strip())
+        if result is not None:
+            return result
 
-    # 3. 省级兜底
-    return _first(df["省份"] == province.strip())
+    return None
 
 
 def calc_freight(
