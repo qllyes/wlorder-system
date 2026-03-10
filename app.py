@@ -631,31 +631,11 @@ async def shipments_content():
                         # 公式: 托运单运输费 = 总重量 * 单价 + 运送费
                         up = float(new_unit_price.value or 0)
                         df = float(new_delivery_fee.value or 0)
+                        freight_fee = round(total_weight_t * up + df, 2)
                         parsed_addr = waybill_generator.parse_cn_address(address_input.value)
                         province_val = province_input.value or parsed_addr.get('province', '')
                         city_val = city_input.value or parsed_addr.get('city', '')
                         district_val = district_input.value or parsed_addr.get('district', '')
-                        try:
-                            matched_price = freight_calc.lookup_unit_price(province_val, city_val, district_val)
-                        except Exception as ex:
-                            ui.notify(f'单价表匹配失败，将使用手工单价：{ex}', type='warning')
-                            matched_price = None
-                        unit_price_source = 'manual_input'
-                        if matched_price is not None:
-                            up = float(matched_price)
-                            new_unit_price.value = up
-                            unit_price_source = 'district_match'
-
-                        freight_fee_mode = 'auto'
-                        if total_weight_t > 8:
-                            freight_fee = float(manual_freight_fee.value or 0)
-                            if freight_fee <= 0:
-                                ui.notify('总重量超过8吨，托运单运输费需手动填写且大于0', type='warning')
-                                return
-                            freight_fee_mode = 'manual'
-                        else:
-                            freight_fee = round(total_weight_t * up + df, 2)
-                            freight_fee_mode = 'auto'
                         
                         new_sid = await backend_db.create_order_with_items(
                             {
