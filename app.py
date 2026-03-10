@@ -1610,6 +1610,7 @@ async def main_page():
                         ui.label('通过 Excel 导入创建的发货单才会有完整的商品明细行').classes('text-gray-300 text-sm')
                 else:
                     cols = [
+<<<<<<< codex/fix-auto-update-for-shipping-order-weight
                         {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left', 'style': 'width: 28%;', 'headerStyle': 'width: 28%; text-align: left;'},
                         {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center', 'style': 'width: 16%;', 'headerStyle': 'width: 16%; text-align: center;'},
                         {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center', 'style': 'width: 12%;', 'headerStyle': 'width: 12%; text-align: center;'},
@@ -1618,6 +1619,17 @@ async def main_page():
                     ]
                     ui.label(f'共 {len(editable_rows)} 条商品记录（单重变更将自动同步行重）').classes('text-sm text-gray-500 mb-2')
                     with ui.table(columns=cols, rows=editable_rows, row_key='id').props('table-style="table-layout:fixed;width:100%"').classes('w-full') as editable_table:
+=======
+                        {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
+                        {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
+                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
+                        {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
+                        {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
+                        {'name': 'weight_source', 'label': '计费方', 'field': 'weight_source', 'align': 'center'},
+                    ]
+                    ui.label(f'共 {len(editable_rows)} 条商品记录（单重变更将自动同步行重）').classes('text-sm text-gray-500 mb-2')
+                    with ui.table(columns=cols, rows=editable_rows, row_key='id').classes('w-full') as editable_table:
+>>>>>>> main
                         editable_table.add_slot('body', r'''
                             <q-tr :props="props">
                                 <q-td key="product_name" :props="props" class="text-left">
@@ -1628,6 +1640,7 @@ async def main_page():
                                     <q-input dense borderless v-model="props.row.spec" input-class="text-center"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'spec', value: $event})" />
                                 </q-td>
+<<<<<<< codex/fix-auto-update-for-shipping-order-weight
                                 <q-td key="quantity" :props="props" class="text-center">
                                     <q-input dense borderless type="number" v-model.number="props.row.quantity" input-class="text-center"
                                         @update:model-value="(props.row.line_weight_kg = Math.round(((Number($event) || 0) * (Number(props.row.unit_weight_kg) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
@@ -1635,6 +1648,18 @@ async def main_page():
                                 <q-td key="unit_weight_kg" :props="props" class="text-center">
                                     <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg" input-class="text-center"
                                         @update:model-value="(props.row.line_weight_kg = Math.round(((Number(props.row.quantity) || 0) * (Number($event) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
+=======
+                                <q-td key="quantity" :props="props">
+                                    <q-input dense borderless type="number" v-model.number="props.row.quantity"
+                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number($event) || 0) * (Number(props.row.unit_weight_kg) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
+                                </q-td>
+                                <q-td key="unit_weight_kg" :props="props">
+                                    <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg"
+                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number(props.row.quantity) || 0) * (Number($event) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
+                                </q-td>
+                                <q-td key="line_weight_kg" :props="props">
+                                    <q-input dense borderless readonly input-class="text-gray-700" type="number" step="0.001" v-model.number="props.row.line_weight_kg" />
+>>>>>>> main
                                 </q-td>
                                 <q-td key="line_weight_kg" :props="props" class="text-center">
                                     <q-input dense borderless readonly input-class="text-gray-700 text-center" type="number" step="0.001" v-model.number="props.row.line_weight_kg" />
