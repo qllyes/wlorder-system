@@ -43,6 +43,11 @@ def parse_logistics_options(raw: str) -> list[str]:
             uniq.append(v)
     return uniq
 
+
+def normalize_spec_text(spec: str) -> str:
+    """统一规格文本，降低用户手输差异造成的匹配失败。"""
+    return (spec or '').strip().lower().replace('×', '*').replace('x', '*').replace(' ', '')
+
 def generate_qr_base64(data: str) -> str:
     """根据字符串生成二维码图像的 Base64 编码"""
     qr = qrcode.QRCode(box_size=10, border=2)
@@ -412,9 +417,6 @@ async def shipments_content():
                     
                     # 🧪 全局状态
                     global_spec_weights = {}  # 动态加载，避免设置页修改后不生效
-                    last_parsed_payload = {}  # 存储最近一次 Excel 解析的完整原始数据，用于还原功能
-
-
                     
                     manual_items: list[dict] = [{'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''}]
 
@@ -422,15 +424,12 @@ async def shipments_content():
                         # 🆕 动态加载规格权重
                         spec_rows_data = await backend_db.get_all_spec_weights()
                         global_spec_weights.clear()
-                        global_spec_weights.update({r['spec']: r['weight_kg'] for r in spec_rows_data})
+                        global_spec_weights.update({normalize_spec_text(r['spec']): r['weight_kg'] for r in spec_rows_data})
 
                         # 清空商品行
                         manual_items.clear()
                         manual_items.append({'name': '', 'qty': 1, 'unit_weight_kg': 0.0, 'line_weight_kg': 0.0, 'spec': ''})
                         if 'manual_items_refreshable' in locals(): manual_items_refreshable.refresh()
-                        # 🆕 清空还原缓存
-                        last_parsed_payload.clear()
-                        
                         # 清空输入框
                         if 'customer_input' in locals():
                             date_input.value = str(datetime.date.today())
@@ -501,13 +500,14 @@ async def shipments_content():
                                         def _s(val, row=item, w_input=w): 
                                             clean_val = (val or '').strip()
                                             row['spec'] = clean_val
+                                            normalized_spec = normalize_spec_text(clean_val)
                                             # 🆕 实时权重联动：查表并更新单重输入框
-                                            if clean_val in global_spec_weights:
-                                                new_w = global_spec_weights[clean_val]
+                                            if normalized_spec in global_spec_weights:
+                                                new_w = global_spec_weights[normalized_spec]
                                                 row['unit_weight_kg'] = new_w
                                                 w_input.value = new_w  # 强制更新 UI 组件值
-                                                row['line_weight_kg'] = round(new_w * int(row.get('qty', 0) or 0), 3)
-                                                sync_summary_fields()
+                                            row['line_weight_kg'] = round(float(row.get('unit_weight_kg', 0) or 0) * int(row.get('qty', 0) or 0), 3)
+                                            sync_summary_fields()
 
                                         if len(manual_items) > 1:
                                             def _rm(row=item):
@@ -558,19 +558,6 @@ async def shipments_content():
                                 }
                                 manual_items.append(row_data)
                                 current_prods_list.append(row_data.copy())
-                            
-                            # 🆕 缓存解析结果，用于后续“还原”
-                            last_parsed_payload['receiver'] = {
-                                'name': data['receiver_name'],
-                                'phone': data['receiver_phone'],
-                                'address': data['receiver_address'],
-                                'province': data.get('receiver_province', ''),
-                                'city': data.get('receiver_city', ''),
-                                'district': data.get('receiver_district', ''),
-                            }
-                            last_parsed_payload['products'] = current_prods_list
-                            last_parsed_payload['filename'] = filename
-                            
                             manual_items_refreshable.refresh()
                             sync_summary_fields()
                             
@@ -621,29 +608,6 @@ async def shipments_content():
                             with upload_status_container:
                                 ui.icon('check_circle', color='green-500', size='18px')
                                 status_label = ui.label('').classes('text-[11px] text-green-700 font-bold')
-                                
-                                # 🆕 还原初始值功能
-                                def restore_original_data():
-                                    if not last_parsed_payload: 
-                                        ui.notify('没有可还原的 Excel 数据', type='warning')
-                                        return
-                                    rec = last_parsed_payload.get('receiver', {})
-                                    customer_input.value = rec['name']
-                                    phone_input.value = rec['phone']
-                                    address_input.value = rec['address']
-                                    province_input.value = rec['province']
-                                    city_input.value = rec['city']
-                                    district_input.value = rec['district']
-                                    
-                                    manual_items.clear()
-                                    for p in last_parsed_payload.get('products', []):
-                                        manual_items.append(p.copy())
-                                    
-                                    manual_items_refreshable.refresh()
-                                    sync_summary_fields()
-                                    ui.notify('已还原至 Excel 初始解析值', type='info')
-
-                                ui.button('🔄 还原初始值', on_click=restore_original_data).props('flat dense color=green-6 no-caps text-xs').classes('ml-2')
                                 ui.button(icon='close', on_click=lambda: upload_status_container.set_visibility(False)).props('flat round dense color=grey-4').classes('ml-auto size-xs')
 
 
@@ -669,7 +633,7 @@ async def shipments_content():
                                 total_qty_input = ui.number('总数量(件)(自动汇总)', value=1, format='%.0f').props('outlined dense readonly bg-blue-50')
                                 new_unit_price = ui.number('单价(元/吨)*', value=0, min=0, format='%.2f').props('outlined dense input-class="text-blue-600 font-bold"')
                                 new_delivery_fee = ui.number('运送费(元)*', value=0, min=0, format='%.2f').props('outlined dense')
-                                manual_total_weight = ui.number('总重量(吨)(预估/实填)', value=0, min=0, format='%.3f').props('outlined dense input-class="text-blue-600 font-bold"')
+                                manual_total_weight = ui.number('总重量(吨)(自动汇总)', value=0, min=0, format='%.3f').props('outlined dense readonly bg-blue-50 input-class="text-blue-600 font-bold"')
                                 manual_freight_fee = ui.number('托运单运输费(预估/实填)', value=0, min=0, format='%.2f').props('outlined dense input-class="text-blue-600 font-bold"')
 
                         with ui.card().classes('w-full p-2 border shadow-sm'):
@@ -1584,7 +1548,6 @@ async def main_page():
                 'quantity': int(float(r.get('quantity', 0) or 0)),
                 'unit_weight_kg': float(r.get('unit_weight_kg', 0) or 0),
                 'line_weight_kg': float(r.get('line_weight_kg', 0) or 0),
-                'weight_source': r.get('weight_source', 'manual_override'),
             })
 
         _page_ctx['detail_pending_edits'] = _page_ctx.get('detail_pending_edits', {})
@@ -1647,45 +1610,34 @@ async def main_page():
                         ui.label('通过 Excel 导入创建的发货单才会有完整的商品明细行').classes('text-gray-300 text-sm')
                 else:
                     cols = [
-                        {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
-                        {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
-                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
-                        {'name': 'parsed_spec', 'label': '解析规格', 'field': 'parsed_spec', 'align': 'center'},
-                        {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
-                        {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
-                        {'name': 'weight_source', 'label': '计费方', 'field': 'weight_source', 'align': 'center'},
+                        {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left', 'style': 'width: 28%;', 'headerStyle': 'width: 28%; text-align: left;'},
+                        {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center', 'style': 'width: 16%;', 'headerStyle': 'width: 16%; text-align: center;'},
+                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center', 'style': 'width: 12%;', 'headerStyle': 'width: 12%; text-align: center;'},
+                        {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center', 'style': 'width: 14%;', 'headerStyle': 'width: 14%; text-align: center;'},
+                        {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center', 'style': 'width: 14%;', 'headerStyle': 'width: 14%; text-align: center;'},
                     ]
-                    ui.label(f'共 {len(editable_rows)} 条商品记录（可行内编辑）').classes('text-sm text-gray-500 mb-2')
-                    with ui.table(columns=cols, rows=editable_rows, row_key='id').classes('w-full') as editable_table:
+                    ui.label(f'共 {len(editable_rows)} 条商品记录（单重变更将自动同步行重）').classes('text-sm text-gray-500 mb-2')
+                    with ui.table(columns=cols, rows=editable_rows, row_key='id').props('table-style="table-layout:fixed;width:100%"').classes('w-full') as editable_table:
                         editable_table.add_slot('body', r'''
                             <q-tr :props="props">
-                                <q-td key="product_name" :props="props">
-                                    <q-input dense borderless v-model="props.row.product_name"
+                                <q-td key="product_name" :props="props" class="text-left">
+                                    <q-input dense borderless v-model="props.row.product_name" input-class="text-left"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'product_name', value: $event})" />
                                 </q-td>
-                                <q-td key="spec" :props="props">
-                                    <q-input dense borderless v-model="props.row.spec"
+                                <q-td key="spec" :props="props" class="text-center">
+                                    <q-input dense borderless v-model="props.row.spec" input-class="text-center"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'spec', value: $event})" />
                                 </q-td>
-                                <q-td key="quantity" :props="props">
-                                    <q-input dense borderless type="number" v-model.number="props.row.quantity"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event})" />
+                                <q-td key="quantity" :props="props" class="text-center">
+                                    <q-input dense borderless type="number" v-model.number="props.row.quantity" input-class="text-center"
+                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number($event) || 0) * (Number(props.row.unit_weight_kg) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
                                 </q-td>
-                                <q-td key="parsed_spec" :props="props">
-                                    <q-input dense borderless v-model="props.row.parsed_spec"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'parsed_spec', value: $event})" />
+                                <q-td key="unit_weight_kg" :props="props" class="text-center">
+                                    <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg" input-class="text-center"
+                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number(props.row.quantity) || 0) * (Number($event) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
                                 </q-td>
-                                <q-td key="unit_weight_kg" :props="props">
-                                    <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event})" />
-                                </q-td>
-                                <q-td key="line_weight_kg" :props="props">
-                                    <q-input dense borderless type="number" step="0.001" v-model.number="props.row.line_weight_kg"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: $event})" />
-                                </q-td>
-                                <q-td key="weight_source" :props="props">
-                                    <q-input dense borderless v-model="props.row.weight_source"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'weight_source', value: $event})" />
+                                <q-td key="line_weight_kg" :props="props" class="text-center">
+                                    <q-input dense borderless readonly input-class="text-gray-700 text-center" type="number" step="0.001" v-model.number="props.row.line_weight_kg" />
                                 </q-td>
                             </q-tr>
                         ''')
