@@ -1614,12 +1614,11 @@ async def main_page():
                         {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
                         {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
                         {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
-                        {'name': 'parsed_spec', 'label': '解析规格', 'field': 'parsed_spec', 'align': 'center'},
                         {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
                         {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
                         {'name': 'weight_source', 'label': '计费方', 'field': 'weight_source', 'align': 'center'},
                     ]
-                    ui.label(f'共 {len(editable_rows)} 条商品记录（可行内编辑）').classes('text-sm text-gray-500 mb-2')
+                    ui.label(f'共 {len(editable_rows)} 条商品记录（单重变更将自动同步行重）').classes('text-sm text-gray-500 mb-2')
                     with ui.table(columns=cols, rows=editable_rows, row_key='id').classes('w-full') as editable_table:
                         editable_table.add_slot('body', r'''
                             <q-tr :props="props">
@@ -1633,19 +1632,14 @@ async def main_page():
                                 </q-td>
                                 <q-td key="quantity" :props="props">
                                     <q-input dense borderless type="number" v-model.number="props.row.quantity"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event})" />
-                                </q-td>
-                                <q-td key="parsed_spec" :props="props">
-                                    <q-input dense borderless v-model="props.row.parsed_spec"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'parsed_spec', value: $event})" />
+                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number($event) || 0) * (Number(props.row.unit_weight_kg) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
                                 </q-td>
                                 <q-td key="unit_weight_kg" :props="props">
                                     <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event})" />
+                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number(props.row.quantity) || 0) * (Number($event) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
                                 </q-td>
                                 <q-td key="line_weight_kg" :props="props">
-                                    <q-input dense borderless type="number" step="0.001" v-model.number="props.row.line_weight_kg"
-                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: $event})" />
+                                    <q-input dense borderless readonly input-class="text-gray-700" type="number" step="0.001" v-model.number="props.row.line_weight_kg" />
                                 </q-td>
                                 <q-td key="weight_source" :props="props">
                                     <q-input dense borderless v-model="props.row.weight_source"
