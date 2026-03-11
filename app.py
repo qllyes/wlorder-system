@@ -375,7 +375,12 @@ def build_waybill_preview_html(
 # ════════════════════════════════════════════════
 
 # ​页面上下文桥接器（用于在各 content 函数中访问 main_page 内的 panels 和 refreshable）
-_page_ctx: dict = {}
+def get_page_ctx() -> dict:
+    from nicegui import ui
+    client = ui.context.client
+    if not hasattr(client, '_page_ctx'):
+        client._page_ctx = {}
+    return client._page_ctx
 
 async def shipments_content():
     @ui.refreshable
@@ -781,7 +786,6 @@ async def shipments_content():
                             },
                             prods,
                         )
-                        await backend_db.recalc_shipment_weight_and_fee(new_sid)
                         ui.notify(f'发货单已生成 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
                         customer_input.value = ''
                         phone_input.value = ''
@@ -805,7 +809,10 @@ async def shipments_content():
                         ui.button('取消', on_click=dlg_new_shipment.close).props('outline text-gray-600 border-gray-300')
                         ui.button('🚀 确认创建订单', on_click=submit_shipment, color='primary')
                 
-                ui.button('新建发货单', icon='add', on_click=lambda: (reset_new_shipment_form(), dlg_new_shipment.open())).classes('bg-primary text-white font-bold')
+                async def handle_new_shipment():
+                    await reset_new_shipment_form()
+                    dlg_new_shipment.open()
+                ui.button('新建发货单', icon='add', on_click=handle_new_shipment).classes('bg-primary text-white font-bold')
 
             # ── 调度总台账 ──
             with ui.card().classes('modern-card w-full p-0 overflow-hidden'):
@@ -885,99 +892,131 @@ async def shipments_content():
                 dlg_edit = ui.dialog()
                 with dlg_edit, ui.card().classes('min-w-[500px] p-6'):
                     with ui.row().classes('w-full justify-between items-center mb-4'):
-                        ui.label('✏️ 修改发货单').classes('text-lg font-bold text-blue-800')
+                        ui.label('\u270f\ufe0f \u4fee\u6539\u53d1\u8d27\u5355').classes('text-lg font-bold text-blue-800')
                         ui.button(icon='close', on_click=dlg_edit.close).props('flat round dense')
                     
-                    edit_customer = ui.input('客户名称*').classes('w-full mb-2')
-                    edit_product = ui.input('货物品类*').classes('w-full mb-2')
-                    edit_spec = ui.input('规格').classes('w-full mb-2')
-                    edit_qty = ui.number('数量(件)*', min=1, format='%.0f').classes('w-full mb-2')
-                    edit_address = ui.input('收货详细地址*').classes('w-full mb-2')
-                    
-                    ui.separator().classes('my-4')
-                    ui.label('单据打印及运费配置').classes('text-xs font-bold text-gray-400 mb-1')
+                    edit_customer = ui.input('\u5ba2\u6237\u540d\u79f0*').classes('w-full mb-2')
+                    edit_product = ui.input('\u8d27\u7269\u54c1\u7c7b*').classes('w-full mb-2')
+                    edit_address = ui.input('\u6536\u8d27\u8be6\u7ec6\u5730\u5740*').classes('w-full mb-2')
+
+                    # \u53ea\u8bfb\u5c55\u793a\uff1a\u603b\u6570\u91cf\u3001\u603b\u91cd\u91cf\uff08\u7531\u5546\u54c1\u660e\u7ec6\u9875\u7ba1\u7406\uff09
                     with ui.row().classes('w-full gap-2 mb-2'):
-                        edit_pickup = ui.select(['送货上门', '自提'], value='送货上门', label='取货方式').classes('flex-1')
-                        edit_payment = ui.select(['现付', '提付'], value='现付', label='付款方式').classes('flex-1')
+                        with ui.column().classes('flex-1 gap-0'):
+                            ui.label('\u603b\u6570\u91cf (\u4ef6)').classes('text-xs text-gray-400')
+                            edit_qty_display = ui.label('—').classes('text-sm text-gray-600 font-bold pl-1')
+                        with ui.column().classes('flex-1 gap-0'):
+                            ui.label('\u603b\u91cd\u91cf (\u5428)').classes('text-xs text-gray-400')
+                            edit_weight_display = ui.label('—').classes('text-sm text-gray-600 font-bold pl-1')
+                    ui.label('\u2139\ufe0f \u603b\u6570\u91cf/\u603b\u91cd\u91cf\u8bf7\u5728\u300c\u5546\u54c1\u660e\u7ec6\u300d\u9875\u7f16\u8f91').classes('text-xs text-gray-400 mb-2')
+
+                    ui.separator().classes('my-3')
+                    ui.label('\u5355\u636e\u6253\u5370\u53ca\u8fd0\u8d39\u914d\u7f6e').classes('text-xs font-bold text-gray-400 mb-1')
                     with ui.row().classes('w-full gap-2 mb-2'):
-                        edit_unit_price = ui.number('单价(元/吨)', value=0, min=0, format='%.2f').classes('flex-1')
-                        edit_delivery = ui.number('运送费(元)', value=0, min=0, format='%.2f').classes('flex-1')
-                    edit_manual_freight = ui.number('托运单运输费(>8吨手填)', value=0, min=0, format='%.2f').classes('w-full mb-3')
-                        
-                    ui.separator().classes('my-4')
-                    ui.label('物流分配（自动推导业务模式）').classes('text-xs font-bold text-gray-400 mb-1')
+                        edit_pickup = ui.select(['\u9001\u8d27\u4e0a\u95e8', '\u81ea\u63d0'], value='\u9001\u8d27\u4e0a\u95e8', label='\u53d6\u8d27\u65b9\u5f0f').classes('flex-1')
+                        edit_payment = ui.select(['\u73b0\u4ed8', '\u63d0\u4ed8'], value='\u73b0\u4ed8', label='\u4ed8\u6b3e\u65b9\u5f0f').classes('flex-1')
+                    with ui.row().classes('w-full gap-2 mb-2'):
+                        edit_unit_price = ui.number('\u5355\u4ef7(\u5143/\u5428)', value=0, min=0, format='%.2f').classes('flex-1')
+                        edit_delivery = ui.number('\u8fd0\u9001\u8d39(\u5143)', value=0, min=0, format='%.2f').classes('flex-1')
+
+                    # \u8fd0\u8d39\u9884\u89c8\u533a\u57df\uff1a\u96f6\u5355\u81ea\u52a8\u8ba1\u7b97\uff0c\u624b\u5de5\u8f66/\u8d85\u91cd\u53ef\u8f93\u5165
+                    edit_freight_preview = ui.label('\u2192 \u4e07\u8fd0\u5355\u8fd0\u8f93\u8d39\uff1a\u8ba1\u7b97\u4e2d...').classes('text-sm font-bold text-blue-700 mb-1')
+                    edit_manual_freight = ui.number('\u624b\u5de5\u586b\u5199\u8fd0\u8d39 (\u8d858\u5428/\u624b\u5de5\u8f66/\u4e13\u8f66)', value=0, min=0, format='%.2f').classes('w-full mb-1').props('outlined dense')
+                    edit_freight_hint = ui.label('').classes('text-xs text-gray-400 mb-2')
+
+                    # \u5b9e\u65f6\u64cd\u4f5c\u903b\u8f91\u5185\u90e8\u72b6\u6001
+                    _edit_ctx = {'ship_type': '\u5f85\u5206\u914d', 'total_weight_t': 0.0, 'is_manual_mode': False}
+
+                    def _refresh_edit_freight():
+                        """\u5b9e\u65f6\u6839\u636e\u5355\u4ef7/\u8fd0\u9001\u8d39/\u8fd0\u8f93\u7c7b\u578b\u66f4\u65b0\u8fd0\u8d39\u9884\u89c8"""
+                        up = float(edit_unit_price.value or 0)
+                        df = float(edit_delivery.value or 0)
+                        tw = _edit_ctx['total_weight_t']
+                        st = _edit_ctx['ship_type']
+                        is_manual = st in ('\u6574\u8f66', '\u4e13\u8f66') or tw >= 8.0
+                        _edit_ctx['is_manual_mode'] = is_manual
+
+                        if is_manual:
+                            edit_manual_freight.set_visibility(True)
+                            edit_freight_preview.text = f'\u2192 \u624b\u5de5\u8f66/\u8d85\u91cd: \u8bf7\u4e0b\u65b9\u624b\u586b\u8fd0\u8d39'
+                            edit_freight_preview.classes(replace='text-orange-600 font-bold text-sm mb-1')
+                            edit_freight_hint.text = '\u8fd0\u8d39\u7531\u8c03\u5ea6\u5458\u624b\u586b\uff0c\u4fdd\u5b58\u540e\u5c06\u4ee5\u6b64\u4e3a\u51c6'
+                        else:
+                            auto_fee = freight_calc.calc_freight(tw, st, up, df)
+                            edit_manual_freight.set_visibility(False)
+                            edit_freight_preview.text = f'\u2192 \u4e07\u8fd0\u5355\u8fd0\u8d39: \u00a5{auto_fee:,.2f}  (\u5355\u4ef7{up}\u5143/\u5428 \xd7 {tw}\u5428)'
+                            edit_freight_preview.classes(replace='text-blue-700 font-bold text-sm mb-1')
+                            edit_freight_hint.text = '\u8fd0\u8d39\u7531\u516c\u5f0f\u81ea\u52a8\u8ba1\u7b97\uff0c\u8c03\u6574\u5355\u4ef7\u6216\u8fd0\u9001\u8d39\u53ef\u66f4\u65b0'
+
+                    edit_unit_price.on('update:model-value', lambda: _refresh_edit_freight())
+                    edit_delivery.on('update:model-value', lambda: _refresh_edit_freight())
+
+                    ui.separator().classes('my-3')
+                    ui.label('\u7269\u6d41\u5206\u914d\uff08\u81ea\u52a8\u63a8\u5bfc\u4e1a\u52a1\u6a21\u5f0f\uff09').classes('text-xs font-bold text-gray-400 mb-1')
                     edit_selector = create_smart_logistics_selector()
-                    edit_mode_hint = ui.label('当前业务模式：待分配').classes('text-[11px] text-blue-600 mb-4')
+                    edit_mode_hint = ui.label('\u5f53\u524d\u4e1a\u52a1\u6a21\u5f0f\uff1a\u5f85\u5206\u914d').classes('text-[11px] text-blue-600 mb-4')
                     
                     async def save_edit():
                         if not edit_customer.value or not edit_product.value or not edit_address.value:
-                            ui.notify('请完整填写必填项', type='warning')
+                            ui.notify('\u8bf7\u5b8c\u6574\u586b\u5199\u5fc5\u586b\u9879', type='warning')
                             return
-                        # 计算总重量
-                        spec_rows = await backend_db.get_all_spec_weights()
-                        sw = {r['spec']: r['weight_kg'] for r in spec_rows}
-                        prods = [{'name': edit_product.value, 'spec': '', 'qty': int(edit_qty.value)}]
-                        _, total_weight_t = waybill_generator.calc_total_weight(prods, sw)
+
                         up = float(edit_unit_price.value or 0)
                         df = float(edit_delivery.value or 0)
+                        tw = _edit_ctx['total_weight_t']
+                        st = _edit_ctx['ship_type']
+                        is_manual = _edit_ctx['is_manual_mode']
+
                         parsed_addr = waybill_generator.parse_cn_address(edit_address.value)
+                        unit_price_source = 'manual_input'
                         try:
                             matched_price = freight_calc.lookup_unit_price(
                                 parsed_addr.get('province', ''),
                                 parsed_addr.get('city', ''),
                                 parsed_addr.get('district', ''),
                             )
+                            if matched_price is not None:
+                                up = float(matched_price)
+                                edit_unit_price.value = up
+                                unit_price_source = 'district_match'
                         except Exception as ex:
-                            ui.notify(f'单价表匹配失败，将使用手工单价：{ex}', type='warning')
-                            matched_price = None
-                        unit_price_source = 'manual_input'
-                        if matched_price is not None:
-                            up = float(matched_price)
-                            edit_unit_price.value = up
-                            unit_price_source = 'district_match'
-                        if total_weight_t > 8:
-                            freight_fee = float(edit_manual_freight.value or 0)
-                            if freight_fee <= 0:
-                                ui.notify('总重量超过8吨，托运单运输费需手动填写且大于0', type='warning')
-                                return
-                            freight_fee_mode = 'manual'
-                        else:
-                            freight_fee = round(total_weight_t * up + df, 2)
-                            freight_fee_mode = 'auto'
-                        
+                            ui.notify(f'\u5355\u4ef7\u8868\u5339\u914d\u5931\u8d25\uff0c\u4f7f\u7528\u624b\u5de5\u5355\u4ef7\uff1a{ex}', type='warning')
+
                         provider = current_edit_logistics['value']
                         inferred_mode = current_edit_ship_type['value']
                         if current_edit_logistics_mutable['value']:
                             provider = edit_selector['get_value']()
-                            inferred_mode = '整车' if provider == '整车' else ('零单' if provider else current_edit_ship_type['value'])
+                            inferred_mode = '\u6574\u8f66' if provider == '\u6574\u8f66' else ('\u96f6\u5355' if provider else current_edit_ship_type['value'])
 
-                        # 🆕 更新主表
+                        # \u8fd0\u8d39\u786e\u5b9a\u903b\u8f91\uff1a\u624b\u5de5\u6a21\u5f0f\u7528\u624b\u586b\uff0c\u81ea\u52a8\u6a21\u5f0f\u7528\u516c\u5f0f
+                        if is_manual:
+                            freight_fee = float(edit_manual_freight.value or 0)
+                            if freight_fee <= 0:
+                                ui.notify('\u6574\u8f66/\u4e13\u8f66/\u8d85\u91cd\u5355\u636e\uff0c\u9700\u8981\u586b\u5199\u8fd0\u8d39\u4e14\u5927\u4e8e0', type='warning')
+                                return
+                            freight_fee_mode = 'manual'
+                        else:
+                            freight_fee = freight_calc.calc_freight(tw, inferred_mode, up, df)
+                            freight_fee_mode = 'auto'
+
+                        # \u53ea\u66f4\u65b0\u4e3b\u8868 shipments\uff0c\u4e0d\u518d\u89e6\u78b0 shipment_products
                         await backend_db.update_shipment_info(
-                            curr_sid.text, edit_customer.value, edit_product.value, 
-                            int(edit_qty.value), edit_address.value, inferred_mode,
+                            curr_sid.text, edit_customer.value, edit_product.value,
+                            int(_edit_ctx.get('total_qty', 0)), edit_address.value, inferred_mode,
                             edit_pickup.value, edit_payment.value,
-                            total_weight=total_weight_t, unit_price=up,
+                            total_weight=tw, unit_price=up,
                             delivery_fee=df, freight_fee=freight_fee,
                             freight_fee_mode=freight_fee_mode, unit_price_source=unit_price_source,
                         )
-                        # 🆕 同步更新明细子表 (单品模式)
-                        prods_to_save = [{
-                            'name': edit_product.value,
-                            'spec': edit_spec.value or '',
-                            'qty': int(edit_qty.value),
-                            'unit_weight_kg': (total_weight_t * 1000 / int(edit_qty.value)) if int(edit_qty.value) > 0 else 0
-                        }]
-                        await backend_db.save_shipment_products(curr_sid.text, prods_to_save)
                         if provider:
                             await ensure_logistics_option(provider)
                             await backend_db.set_shipment_logistics_provider(curr_sid.text, provider)
-                        ui.notify(f'修改已保存 | 总重量: {total_weight_t}吨 | 托运单运输费: ¥{freight_fee}', type='positive')
+                        ui.notify(f'\u4fee\u6539\u5df2\u4fdd\u5b58 | \u8fd0\u8d39: \u00a5{freight_fee}', type='positive')
                         dlg_edit.close()
                         list_refreshable.refresh()
-                        
+
                     with ui.row().classes('w-full justify-end gap-2 mt-6'):
-                        ui.button('取消', on_click=dlg_edit.close).props('outline text-gray-600 border-gray-300')
-                        ui.button('保存修改', on_click=save_edit, color='primary')
+                        ui.button('\u53d6\u6d88', on_click=dlg_edit.close).props('outline text-gray-600 border-gray-300')
+                        ui.button('\u4fdd\u5b58\u4fee\u6539', on_click=save_edit, color='primary')
                 
                 # ── 商品明细下钻（已升级为页面级面板，见 detail_view_content） ──
 
@@ -1252,7 +1291,8 @@ async def shipments_content():
                                             output = io.StringIO()
                                             writer = csv.DictWriter(output, fieldnames=["shipment_id", "ship_type", "status", "customer_name", "product_name", "quantity", "delivery_address", "created_at"])
                                             writer.writerow({
-                                                "shipment_id": "发货号", "ship_type": "模式", "status": "状态",
+                                                "shipment_id": "发货号",
+                                                "ship_type": "模式", "status": "状态",
                                                 "customer_name": "收货人", "product_name": "货物品类", "quantity": "数量",
                                                 "delivery_address": "收货地址", "created_at": "创建时间"
                                             })
@@ -1280,8 +1320,8 @@ async def shipments_content():
                         table.add_slot('body-cell-batch', '''
                             <q-td :props="props">
                                 <span v-if="props.row.batch_id" class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded cursor-help" :title="props.row.batch_id">
-                                    {{ props.row.batch_id.substring(0, 12) + '...' }}
-                                </span>
+                                     {{ props.row.batch_id.substring(0, 12) + '...' }}
+                                 </span>
                             </q-td>
                         ''')
                         table.add_slot('body-cell-actions', '''
@@ -1313,15 +1353,26 @@ async def shipments_content():
                             curr_sid.set_text(row['shipment_id'])
                             edit_customer.value = row['customer_name']
                             edit_product.value = row['product_name']
-                            edit_qty.value = row['quantity']
-                            # 🆕 异步加载明细表中的规格
-                            async def _load_spec():
-                                p_list = await backend_db.get_shipment_products(row['shipment_id'])
-                                if p_list: edit_spec.value = p_list[0].get('spec', '')
-                                else: edit_spec.value = ''
-                            ui.timer(0, _load_spec, once=True)
-
                             edit_address.value = row['delivery_address']
+
+                            # 异步加载明细行以获取展示用的总件数和总重量
+                            async def _load_totals():
+                                p_list = await backend_db.get_shipment_products(row['shipment_id'])
+                                total_qty_v = sum(int(float(p.get('quantity', 0) or 0)) for p in p_list)
+                                total_kg_v = sum(float(p.get('line_weight_kg', 0) or 0) for p in p_list)
+                                total_t_v = round(total_kg_v / 1000, 3)
+                                if total_t_v == 0:
+                                    total_t_v = float(row.get('total_weight', 0) or 0)
+                                if total_qty_v == 0:
+                                    total_qty_v = int(row.get('quantity', 0) or 0)
+                                edit_qty_display.text = f'{total_qty_v} 件'
+                                edit_weight_display.text = f'{total_t_v} 吨'
+                                _edit_ctx['total_qty'] = total_qty_v
+                                _edit_ctx['total_weight_t'] = total_t_v
+                                _edit_ctx['ship_type'] = row.get('ship_type', '待分配')
+                                _refresh_edit_freight()
+                            ui.timer(0, _load_totals, once=True)
+
                             current_edit_ship_type['value'] = row.get('ship_type', '待分配')
                             provider = (row.get('logistics_provider') or '').strip()
                             current_edit_logistics['value'] = provider
@@ -1382,12 +1433,13 @@ async def shipments_content():
 
                         async def handle_show_detail(e):
                             sid = e.args.get('shipment_id', '')
-                            _page_ctx['detail_shipment_id'] = sid
+                            ctx = get_page_ctx()
+                            ctx['detail_shipment_id'] = sid
                             # 通过页面上下文桥接SPA切换
-                            if 'panels' in _page_ctx:
-                                _page_ctx['panels'].value = 'detail_view'
-                            if 'detail_refresh' in _page_ctx:
-                                _page_ctx['detail_refresh'].refresh()
+                            if 'panels' in ctx:
+                                ctx['panels'].value = 'detail_view'
+                            if 'detail_refresh' in ctx:
+                                ctx['detail_refresh'].refresh()
 
                         table.on('edit_shipment', handle_edit_shipment)
                         table.on('cancel_shipment', handle_cancel_shipment)
@@ -1397,7 +1449,7 @@ async def shipments_content():
                         table.on('fill_lingdan', handle_fill_lingdan)
                         table.on('show_detail', handle_show_detail)
 
-                _page_ctx['shipments_refresh'] = list_refreshable
+                get_page_ctx()['shipments_refresh'] = list_refreshable
                 await list_refreshable()
     
     await main_shipments_refreshable()
@@ -1512,7 +1564,7 @@ async def main_page():
             ui.label(f"📅 {datetime.date.today()}").classes('text-gray-400')
             ui.icon('account_circle', size='sm').classes('text-gray-400')
 
-    with ui.left_drawer(fixed=True).classes('bg-slate-900 text-white w-30 min-h-screen flex flex-col p-0') as left_drawer:
+    with ui.left_drawer(value=True, fixed=True).classes('bg-slate-900 text-white w-30 min-h-screen flex flex-col p-0') as left_drawer:
         with ui.row().classes('items-center gap-3 p-4 pl-6 mb-2 mt-4 w-full'):
             ui.icon('local_shipping', size='lg', color='blue-400')
             ui.label('骄阳物流').classes('text-lg font-bold text-white tracking-widest')
@@ -1530,7 +1582,8 @@ async def main_page():
     # ── 商品明细下钻面板（全景视口）──
     @ui.refreshable
     async def detail_view_refreshable():
-        sid = _page_ctx.get('detail_shipment_id', '')
+        ctx = get_page_ctx()
+        sid = ctx.get('detail_shipment_id', '')
         detail_rows = await backend_db.get_shipment_products(sid) if sid else []
         ship_info = await backend_db.get_shipment_by_id(sid) if sid else {}
         allow_edit_shipped = (await backend_db.get_setting('allow_edit_shipped_weight', '0')) == '1'
@@ -1550,8 +1603,8 @@ async def main_page():
                 'line_weight_kg': float(r.get('line_weight_kg', 0) or 0),
             })
 
-        _page_ctx['detail_pending_edits'] = _page_ctx.get('detail_pending_edits', {})
-        pending_edits = _page_ctx['detail_pending_edits']
+        ctx['detail_pending_edits'] = ctx.get('detail_pending_edits', {})
+        pending_edits = ctx['detail_pending_edits']
 
         def patch_row(row_id: int, key: str, value):
             target = next((x for x in editable_rows if int(x.get('id') or 0) == int(row_id)), None)
@@ -1563,6 +1616,39 @@ async def main_page():
             if key in {'quantity', 'unit_weight_kg'}:
                 target['line_weight_kg'] = round(qty * unit_w, 3)
             pending_edits[row_id] = dict(target)
+            summary_area.refresh()
+
+        @ui.refreshable
+        def summary_area():
+            # 实时计算当前表格中（含未保存改动）的总数值
+            cur_qty = sum(int(float(r.get('quantity', 0) or 0)) for r in editable_rows)
+            cur_kg = sum(float(r.get('line_weight_kg', 0) or 0) for r in editable_rows)
+            cur_t = round(cur_kg / 1000, 3)
+
+            # 统一运费逻辑
+            up = float(ship_info.get('unit_price', 0))
+            df = float(ship_info.get('delivery_fee', 0))
+            st = ship_info.get('ship_type', '零单')
+            
+            # 调用统一公式
+            theoretical = freight_calc.calc_freight(cur_t, st, up, df)
+            
+            # 判定当前是否为手工模式（整车/专车，或理论值为0且已有运费，或重量>=8t）
+            is_manual = ship_info.get('freight_fee_mode') == 'manual' or st in ('整车', '专车') or cur_t >= 8.0
+            live_freight = ship_info.get('freight_fee', 0) if (theoretical == 0 and is_manual) else theoretical
+            
+            status_hint = " (待保存)" if pending_edits else ""
+            
+            with ui.card().classes('w-full p-4 bg-blue-50 border border-blue-100 rounded-xl shadow-sm'):
+                with ui.grid(columns=4).classes('w-full gap-2'):
+                    ui.label(f"发货单号：{sid}").classes('text-sm text-blue-900')
+                    ui.label(f"收货人：{ship_info.get('customer_name','')}").classes('text-sm text-blue-900')
+                    ui.label(f"总件数：{cur_qty}{status_hint}").classes('text-sm text-blue-900' + (' font-bold italic' if status_hint else ''))
+                    ui.label(f"总运费：¥{live_freight:,.2f}{status_hint}").classes('text-sm text-blue-900' + (' font-bold italic' if status_hint else ''))
+                    ui.label(f"状态：{ship_info.get('status','')}").classes('text-sm text-blue-900')
+                    ui.label(f"总重量：{cur_t}吨{status_hint}").classes('text-sm text-blue-900' + (' font-bold italic' if status_hint else ''))
+                    ui.label(f"物流：{ship_info.get('logistics_provider','') or '-'}").classes('text-sm text-blue-900')
+                    ui.label(f"地址：{ship_info.get('delivery_address','')}").classes('text-sm text-blue-900 truncate')
 
         with ui.column().classes('w-full max-w-7xl mx-auto mt-6 px-4 mb-12 gap-4'):
             # ── 顶部动作栏 ──
@@ -1590,16 +1676,7 @@ async def main_page():
                     ui.button('📥 导出明细 Excel', on_click=export_detail_excel, color='green-7').props('outline')
 
             if ship_info:
-                with ui.card().classes('w-full p-4 bg-blue-50 border border-blue-100 rounded-xl shadow-sm'):
-                    with ui.grid(columns=4).classes('w-full gap-2'):
-                        ui.label(f"发货单号：{sid}").classes('text-sm text-blue-900')
-                        ui.label(f"收货人：{ship_info.get('customer_name','')}").classes('text-sm text-blue-900')
-                        ui.label(f"总件数：{ship_info.get('quantity',0)}").classes('text-sm text-blue-900')
-                        ui.label(f"总运费：¥{ship_info.get('freight_fee',0)}").classes('text-sm text-blue-900')
-                        ui.label(f"状态：{ship_info.get('status','')}").classes('text-sm text-blue-900')
-                        ui.label(f"总重量：{ship_info.get('total_weight',0)}吨").classes('text-sm text-blue-900')
-                        ui.label(f"物流：{ship_info.get('logistics_provider','') or '-'}").classes('text-sm text-blue-900')
-                        ui.label(f"地址：{ship_info.get('delivery_address','')}").classes('text-sm text-blue-900 truncate')
+                summary_area()
 
             # ── 下方：动态列宽表 ──
             with ui.card().classes('modern-card w-full p-6'):
@@ -1610,26 +1687,16 @@ async def main_page():
                         ui.label('通过 Excel 导入创建的发货单才会有完整的商品明细行').classes('text-gray-300 text-sm')
                 else:
                     cols = [
-<<<<<<< codex/fix-auto-update-for-shipping-order-weight
-                        {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left', 'style': 'width: 28%;', 'headerStyle': 'width: 28%; text-align: left;'},
-                        {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center', 'style': 'width: 16%;', 'headerStyle': 'width: 16%; text-align: center;'},
-                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center', 'style': 'width: 12%;', 'headerStyle': 'width: 12%; text-align: center;'},
-                        {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center', 'style': 'width: 14%;', 'headerStyle': 'width: 14%; text-align: center;'},
-                        {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center', 'style': 'width: 14%;', 'headerStyle': 'width: 14%; text-align: center;'},
+                        {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left', 'style': 'width: 25%;', 'headerStyle': 'text-align: left;'},
+                        {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center', 'style': 'width: 15%;'},
+                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center', 'style': 'width: 12%;'},
+                        {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center', 'style': 'width: 14%;'},
+                        {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center', 'style': 'width: 14%;'},
+                        # 这里保留计费方字段
+                        {'name': 'weight_source', 'label': '计费方', 'field': 'weight_source', 'align': 'center', 'style': 'width: 20%;'},
                     ]
-                    ui.label(f'共 {len(editable_rows)} 条商品记录（单重变更将自动同步行重）').classes('text-sm text-gray-500 mb-2')
+                    ui.label(f'共 {len(editable_rows)} 条商品记录（数据变动将实时更新汇总）').classes('text-sm text-gray-500 mb-2')
                     with ui.table(columns=cols, rows=editable_rows, row_key='id').props('table-style="table-layout:fixed;width:100%"').classes('w-full') as editable_table:
-=======
-                        {'name': 'product_name', 'label': '品名', 'field': 'product_name', 'align': 'left'},
-                        {'name': 'spec', 'label': '规格', 'field': 'spec', 'align': 'center'},
-                        {'name': 'quantity', 'label': '件数', 'field': 'quantity', 'align': 'center'},
-                        {'name': 'unit_weight_kg', 'label': '单重(kg)', 'field': 'unit_weight_kg', 'align': 'center'},
-                        {'name': 'line_weight_kg', 'label': '行重(kg)', 'field': 'line_weight_kg', 'align': 'center'},
-                        {'name': 'weight_source', 'label': '计费方', 'field': 'weight_source', 'align': 'center'},
-                    ]
-                    ui.label(f'共 {len(editable_rows)} 条商品记录（单重变更将自动同步行重）').classes('text-sm text-gray-500 mb-2')
-                    with ui.table(columns=cols, rows=editable_rows, row_key='id').classes('w-full') as editable_table:
->>>>>>> main
                         editable_table.add_slot('body', r'''
                             <q-tr :props="props">
                                 <q-td key="product_name" :props="props" class="text-left">
@@ -1640,7 +1707,6 @@ async def main_page():
                                     <q-input dense borderless v-model="props.row.spec" input-class="text-center"
                                         @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'spec', value: $event})" />
                                 </q-td>
-<<<<<<< codex/fix-auto-update-for-shipping-order-weight
                                 <q-td key="quantity" :props="props" class="text-center">
                                     <q-input dense borderless type="number" v-model.number="props.row.quantity" input-class="text-center"
                                         @update:model-value="(props.row.line_weight_kg = Math.round(((Number($event) || 0) * (Number(props.row.unit_weight_kg) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
@@ -1648,21 +1714,13 @@ async def main_page():
                                 <q-td key="unit_weight_kg" :props="props" class="text-center">
                                     <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg" input-class="text-center"
                                         @update:model-value="(props.row.line_weight_kg = Math.round(((Number(props.row.quantity) || 0) * (Number($event) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
-=======
-                                <q-td key="quantity" :props="props">
-                                    <q-input dense borderless type="number" v-model.number="props.row.quantity"
-                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number($event) || 0) * (Number(props.row.unit_weight_kg) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'quantity', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
-                                </q-td>
-                                <q-td key="unit_weight_kg" :props="props">
-                                    <q-input dense borderless type="number" step="0.001" v-model.number="props.row.unit_weight_kg"
-                                        @update:model-value="(props.row.line_weight_kg = Math.round(((Number(props.row.quantity) || 0) * (Number($event) || 0)) * 1000) / 1000, $parent.$emit('cell_change', {id: props.row.id, key:'unit_weight_kg', value: $event}), $parent.$emit('cell_change', {id: props.row.id, key:'line_weight_kg', value: props.row.line_weight_kg}))" />
-                                </q-td>
-                                <q-td key="line_weight_kg" :props="props">
-                                    <q-input dense borderless readonly input-class="text-gray-700" type="number" step="0.001" v-model.number="props.row.line_weight_kg" />
->>>>>>> main
                                 </q-td>
                                 <q-td key="line_weight_kg" :props="props" class="text-center">
                                     <q-input dense borderless readonly input-class="text-gray-700 text-center" type="number" step="0.001" v-model.number="props.row.line_weight_kg" />
+                                </q-td>
+                                <q-td key="weight_source" :props="props" class="text-center">
+                                    <q-input dense borderless v-model="props.row.weight_source" input-class="text-center"
+                                        @update:model-value="$parent.$emit('cell_change', {id: props.row.id, key:'weight_source', value: $event})" />
                                 </q-td>
                             </q-tr>
                         ''')
@@ -1687,7 +1745,7 @@ async def main_page():
                                 ui.notify('修改成功并已刷新总重/运费', type='positive', position='top')
                                 pending_edits.clear()
                                 detail_view_refreshable.refresh()
-                                shipments_refresh = _page_ctx.get('shipments_refresh')
+                                shipments_refresh = get_page_ctx().get('shipments_refresh')
                                 if shipments_refresh:
                                     shipments_refresh.refresh()
                             except Exception as ex:
@@ -1712,8 +1770,9 @@ async def main_page():
         with ui.tab_panel('detail_view').classes('p-0'): await detail_view_refreshable()
 
     # 将 panels 和 refreshable 注册到模块级上下文，供 shipments_content 等外部函数使用
-    _page_ctx['panels'] = panels
-    _page_ctx['detail_refresh'] = detail_view_refreshable
+    ctx = get_page_ctx()
+    ctx['panels'] = panels
+    ctx['detail_refresh'] = detail_view_refreshable
 
     switch_to_tab('shipments')
 

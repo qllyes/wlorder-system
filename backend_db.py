@@ -13,6 +13,7 @@ import json
 import math
 
 import aiosqlite
+import freight_calc
 
 DB_PATH: str = str(Path(__file__).parent / "logistics.db")
 
@@ -666,29 +667,42 @@ async def recalc_shipment_weight_and_fee(shipment_id: str) -> None:
             total_kg = float(row['total_kg'] or 0)
 
         async with conn.execute(
-            "SELECT unit_price, delivery_fee, freight_fee_mode, freight_fee FROM shipments WHERE shipment_id = ?",
+            "SELECT ship_type, unit_price, delivery_fee, freight_fee_mode, freight_fee FROM shipments WHERE shipment_id = ?",
             (shipment_id,),
         ) as cur:
             ship = await cur.fetchone()
             if not ship:
                 return
+            ship_type = ship['ship_type']
             unit_price = float(ship['unit_price'] or 0)
             delivery_fee = float(ship['delivery_fee'] or 0)
             freight_fee_mode = (ship['freight_fee_mode'] or 'auto').strip() or 'auto'
             current_fee = float(ship['freight_fee'] or 0)
 
         total_weight_t = round(total_kg / 1000, 3)
-        if total_weight_t > 8 and freight_fee_mode == 'manual':
-            await conn.execute(
-                "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
-                (total_weight_t, current_fee, 'manual', shipment_id),
-            )
+        
+        # 🆕 使用统一运费计算逻辑
+        theoretical_fee = freight_calc.calc_freight(total_weight_t, ship_type, unit_price, delivery_fee)
+        
+        # 如果是手工模式且理论计算为0（整车或重量上限），则维持原有运费（current_fee）
+        if total_weight_t >= 8.0 and freight_fee_mode == 'manual':
+            final_fee = current_fee
+            final_mode = 'manual'
+        elif theoretical_fee == 0 and ship_type in ('整车', '专车'):
+            final_fee = current_fee
+            final_mode = 'manual'
+        elif theoretical_fee == 0 and current_fee > 0:
+            # 理论值为 0 但已有有效运费时（如待分配状态），保留原有运费
+            final_fee = current_fee
+            final_mode = freight_fee_mode  # 保留原来的模式
         else:
-            freight_fee = round(total_weight_t * unit_price + delivery_fee, 2)
-            await conn.execute(
-                "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
-                (total_weight_t, freight_fee, 'auto', shipment_id),
-            )
+            final_fee = theoretical_fee
+            final_mode = 'auto'
+
+        await conn.execute(
+            "UPDATE shipments SET total_weight = ?, freight_fee = ?, freight_fee_mode = ? WHERE shipment_id = ?",
+            (total_weight_t, final_fee, final_mode, shipment_id),
+        )
         await conn.commit()
 
 

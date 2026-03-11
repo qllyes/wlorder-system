@@ -131,8 +131,8 @@ def calc_freight(
     if ship_type in ("整车", "专车"):
         return 0.0
 
-    # 零单 / 拼车：按重量区间套公式
-    if ship_type in ("零单", "拼车"):
+    # 零单 / 拼车 / 待分配：按重量区间套公式（"待分配"还未选型，按零单预估）
+    if ship_type in ("零单", "拼车", "待分配"):
         if 5.0 <= weight_t < 8.0:
             # 无送货费
             return round(weight_t * unit_price, 2)
