@@ -233,8 +233,8 @@ def inject_modern_css():
         /* 打印媒介专有样式，隐藏 UI 控件 */
         @media print {
             body * { visibility: hidden !important; }
-            #waybill-print-area, #waybill-print-area * { visibility: visible !important; }
-            #waybill-print-area {
+            .print-active, .print-active * { visibility: visible !important; }
+            .print-active {
                 position: absolute;
                 left: 0;
                 top: 0;
@@ -251,6 +251,17 @@ def inject_modern_css():
             .nicegui-dialog, .q-dialog__backdrop { display: none !important; }
         }
         </style>
+        <script>
+        function printPartial(targetId) {
+            const el = document.getElementById(targetId);
+            if (!el) return;
+            el.classList.add('print-active');
+            window.print();
+            setTimeout(() => {
+                el.classList.remove('print-active');
+            }, 500);
+        }
+        </script>
     ''')
 
 # ════════════════════════════════════════════════
@@ -369,6 +380,108 @@ def build_waybill_preview_html(
     </div>
     """
     return html
+
+
+def build_detail_print_html(
+    shipment_id: str,
+    ship_info: dict,
+    detail_rows: list[dict],
+) -> str:
+    """构建 A4 商品明细打印 HTML（纯内联样式，兼容所有打印机）"""
+    import datetime as _dt
+
+    customer = ship_info.get('customer_name', '')
+    address = ship_info.get('delivery_address', '')
+    status = ship_info.get('status', '')
+    created = ship_info.get('created_at', str(_dt.date.today()))[:10]
+
+    total_qty = sum(int(float(r.get('quantity', 0) or 0)) for r in detail_rows)
+    total_kg = sum(float(r.get('line_weight_kg', 0) or 0) for r in detail_rows)
+    total_t = round(total_kg / 1000, 3)
+
+    up = float(ship_info.get('unit_price', 0) or 0)
+    df = float(ship_info.get('delivery_fee', 0) or 0)
+    st = ship_info.get('ship_type', '零单')
+    freight_fee = freight_calc.calc_freight(total_t, st, up, df)
+    if freight_fee == 0:
+        freight_fee = float(ship_info.get('freight_fee', 0) or 0)
+
+    # 商品行 HTML
+    rows_html = ''
+    for idx, r in enumerate(detail_rows):
+        bg = '#f9fafb' if idx % 2 == 0 else '#ffffff'
+        rows_html += f'''
+        <tr style="background: {bg};">
+            <td style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: center; font-size: 12px;">{idx + 1}</td>
+            <td style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; font-size: 12px;">{r.get('product_name', '')}</td>
+            <td style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: center; font-size: 12px;">{r.get('spec', '') or r.get('parsed_spec', '')}</td>
+            <td style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: center; font-size: 12px; font-weight: bold;">{int(float(r.get('quantity', 0) or 0))}</td>
+            <td style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: center; font-size: 12px;">{float(r.get('unit_weight_kg', 0) or 0):.2f}</td>
+            <td style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: center; font-size: 12px; font-weight: bold;">{float(r.get('line_weight_kg', 0) or 0):.2f}</td>
+        </tr>'''
+
+    now_str = _dt.datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    html = f'''
+    <div style="width: 210mm; min-height: 280mm; margin: 0 auto; background: #fff; padding: 12mm 15mm; font-family: 'Microsoft YaHei', 'SimSun', sans-serif; color: #000; page-break-after: always; box-sizing: border-box; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+        <!-- 页眉 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #1e40af; padding-bottom: 8px; margin-bottom: 12px;">
+            <div>
+                <div style="font-size: 20px; font-weight: bold; color: #1e40af; letter-spacing: 2px;">订单商品明细单</div>
+                <div style="font-size: 11px; color: #6b7280; margin-top: 2px;">Product Detail Sheet</div>
+            </div>
+            <div style="text-align: right; font-size: 12px; color: #374151;">
+                <div><b>发货单号：</b>{shipment_id}</div>
+                <div><b>创建日期：</b>{created}</div>
+            </div>
+        </div>
+
+        <!-- 基本信息 -->
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 12px;">
+            <tr>
+                <td style="padding: 4px 0; width: 50%;"><b>客户名称：</b>{customer}</td>
+                <td style="padding: 4px 0;"><b>状态：</b>{status}</td>
+            </tr>
+            <tr>
+                <td style="padding: 4px 0;" colspan="2"><b>收货地址：</b>{address}</td>
+            </tr>
+        </table>
+
+        <!-- 商品明细表 -->
+        <table style="width: 100%; border-collapse: collapse; border: 2px solid #374151; font-size: 12px;">
+            <thead>
+                <tr style="background: #1e40af; color: #fff;">
+                    <th style="border: 1px solid #374151; padding: 7px 8px; text-align: center; width: 6%;">序号</th>
+                    <th style="border: 1px solid #374151; padding: 7px 8px; text-align: left; width: 30%;">品名</th>
+                    <th style="border: 1px solid #374151; padding: 7px 8px; text-align: center; width: 16%;">规格</th>
+                    <th style="border: 1px solid #374151; padding: 7px 8px; text-align: center; width: 12%;">件数</th>
+                    <th style="border: 1px solid #374151; padding: 7px 8px; text-align: center; width: 16%;">单重(kg)</th>
+                    <th style="border: 1px solid #374151; padding: 7px 8px; text-align: center; width: 16%;">行重(kg)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+
+        <!-- 汇总行 -->
+        <table style="width: 100%; border-collapse: collapse; border: 2px solid #374151; border-top: none; font-size: 13px; font-weight: bold;">
+            <tr style="background: #eff6ff;">
+                <td style="border: 1px solid #374151; padding: 8px; text-align: center; width: 40%;">总件数：{total_qty} 件</td>
+                <td style="border: 1px solid #374151; padding: 8px; text-align: center; width: 30%;">总重量：{total_t} 吨</td>
+                <td style="border: 1px solid #374151; padding: 8px; text-align: center; width: 30%; color: #1e40af;">运费：¥{freight_fee:,.2f}</td>
+            </tr>
+        </table>
+
+        <!-- 页脚 -->
+        <div style="display: flex; justify-content: space-between; margin-top: 20px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 8px;">
+            <span>骄阳物流调度系统 · 商品明细单</span>
+            <span>打印时间：{now_str}</span>
+        </div>
+    </div>
+    '''
+    return html
+
 
 # ════════════════════════════════════════════════
 #  SPA 页面组件：发货调度工作台
@@ -1111,30 +1224,47 @@ async def shipments_content():
                             ship = await backend_db.get_shipment_by_id(sid)
                             if not ship: continue
                             
-                            products = [{'name': ship.get('product_name',''), 'spec': '', 'qty': ship.get('quantity', 0)}]
-                            total_qty, total_weight_t = waybill_generator.calc_total_weight(products, sw)
+                            # 获取真实多行明细数据
+                            detail_rows = await backend_db.get_shipment_products(sid)
                             
+                            # 托运单用（兼容原本的单品显示）
+                            products_for_waybill = detail_rows if detail_rows else [{'name': ship.get('product_name',''), 'spec': '', 'qty': ship.get('quantity', 0)}]
+                            
+                            total_qty_v = sum(int(float(p.get('quantity', 0) or 0)) for p in products_for_waybill)
+                            total_kg_v = sum(float(p.get('line_weight_kg', 0) or 0) for p in products_for_waybill)
+                            total_t_v = round(total_kg_v / 1000, 3)
+
+                            # 若明细无数据，用主表兜底
+                            if total_t_v == 0: total_t_v = float(ship.get('total_weight', 0) or 0)
+                            if total_qty_v == 0: total_qty_v = int(ship.get('quantity', 0) or 0)
+
                             f_fee = ship.get('freight_fee', 0.0)
                             if f_fee == 0.0 and ship.get('ship_type') in ('零单', '拼车'):
                                 d_fee = ship.get('delivery_fee', 0.0)
-                                f_fee = freight_calc.calc_freight(total_weight_t, ship.get('ship_type'), 0, d_fee)
+                                f_fee = freight_calc.calc_freight(total_t_v, ship.get('ship_type'), 0, d_fee)
                                 
                             created_dt_str = ship.get('created_at', str(datetime.date.today()))[:10]
                             
-                            html_piece = build_waybill_preview_html(
+                            # 第 1 页：托运单 HTML
+                            p1_html = build_waybill_preview_html(
                                 order_no=sid,
                                 customer_name=ship.get('customer_name', ''),
                                 customer_phone='', 
                                 address=ship.get('delivery_address', ''),
-                                products=products,
-                                total_qty=total_qty,
-                                total_weight=total_weight_t,
+                                products=products_for_waybill,
+                                total_qty=total_qty_v,
+                                total_weight=total_t_v,
                                 freight_val=f_fee,
                                 pickup_method=ship.get('pickup_method', '送货上门'),
                                 payment_method=ship.get('payment_method', '现付'),
                                 created_at_date=created_dt_str
                             )
-                            html_pieces.append(html_piece)
+                            html_pieces.append(p1_html)
+
+                            # 第 2 页：商品明细 HTML (如果该发货单确有明细记录)
+                            if detail_rows:
+                                p2_html = build_detail_print_html(sid, ship, detail_rows)
+                                html_pieces.append(p2_html)
                             
                         # 拼装包裹层，并放入到HTML组件中
                         # 外层需要设定一个带 ID 的打印区，确保 CSS 能查找到
@@ -1673,6 +1803,49 @@ async def main_page():
                             writer.writerow({k: row.get(k, '') for k in all_keys})
                         csv_bytes = output.getvalue().encode('utf-8-sig')
                         ui.download(csv_bytes, f'订单明细_{sid}.csv')
+
+                    dlg_detail_print = ui.dialog().props('maximized transition-show="slide-up" transition-hide="slide-down"')
+                    dp_container = None
+                    with dlg_detail_print, ui.card().classes('w-full h-full p-0 bg-gray-100 flex flex-col overflow-hidden'):
+                        with ui.row().classes('w-full h-16 bg-white border-b border-gray-200 shadow z-10 items-center justify-between px-6 flex-shrink-0'):
+                            with ui.row().classes('items-center'):
+                                ui.button(icon='arrow_back', on_click=dlg_detail_print.close).props('flat round dense color=gray-600')
+                                ui.label(f'打印套件预览：{sid}').classes('text-xl font-bold ml-4 text-gray-800')
+                            with ui.row().classes('gap-2'):
+                                ui.button('🖨️ 打印托运单 (针式/连续纸)', color='blue-6').classes('h-10 text-bold').on_click(lambda: ui.run_javascript('printPartial("print-area-waybill")'))
+                                ui.button('📄 打印明细记录 (A4)', color='teal-6').classes('h-10 text-bold').on_click(lambda: ui.run_javascript('printPartial("print-area-detail")'))
+                        with ui.column().classes('flex-grow w-full bg-gray-200 p-8 overflow-y-auto items-center'):
+                            dp_container = ui.html('').classes('printable-batch-container w-full max-w-[850px]')
+
+                    async def handle_show_detail_print():
+                        if not ship_info: return
+                        spec_rows = await backend_db.get_all_spec_weights()
+                        sw = {r['spec']: r['weight_kg'] for r in spec_rows}
+                        
+                        cur_qty = sum(int(float(r.get('quantity', 0) or 0)) for r in editable_rows)
+                        cur_kg = sum(float(r.get('line_weight_kg', 0) or 0) for r in editable_rows)
+                        cur_t = round(cur_kg / 1000, 3)
+
+                        f_fee = ship_info.get('freight_fee', 0.0)
+                        if f_fee == 0.0 and ship_info.get('ship_type') in ('零单', '拼车'):
+                            d_fee = ship_info.get('delivery_fee', 0.0)
+                            f_fee = freight_calc.calc_freight(cur_t, ship_info.get('ship_type'), 0, d_fee)
+
+                        # 第1页：托运单
+                        p1 = build_waybill_preview_html(
+                            order_no=sid, customer_name=ship_info.get('customer_name', ''), customer_phone='',
+                            address=ship_info.get('delivery_address', ''), products=detail_rows, total_qty=cur_qty,
+                            total_weight=cur_t, freight_val=f_fee, pickup_method=ship_info.get('pickup_method', '送货上门'),
+                            payment_method=ship_info.get('payment_method', '现付'),
+                            created_at_date=ship_info.get('created_at', str(datetime.date.today()))[:10]
+                        )
+                        # 第2页：商品明细
+                        p2 = build_detail_print_html(sid, ship_info, detail_rows)
+
+                        dp_container.content = f'<div id="print-area-waybill">{p1}</div><div style="width:100%; border-top: 2px dashed #ccc; margin: 40px 0;"></div><div id="print-area-detail">{p2}</div>'
+                        dlg_detail_print.open()
+
+                    ui.button('🖨️ 打印套件', on_click=handle_show_detail_print, color='primary')
                     ui.button('📥 导出明细 Excel', on_click=export_detail_excel, color='green-7').props('outline')
 
             if ship_info:
