@@ -127,6 +127,26 @@ def _generate_id(prefix: str) -> str:
     return f"{prefix}-{ts}-{suffix}"
 
 
+async def _next_waybill_no(conn: aiosqlite.Connection) -> str:
+    """生成 WBYYYYMMDDNNNN 托运单号（同事务内并发安全）。"""
+    biz_date = datetime.datetime.now().strftime("%Y%m%d")
+    await conn.execute(
+        "INSERT OR IGNORE INTO waybill_daily_seq (biz_date, seq) VALUES (?, 0)",
+        (biz_date,),
+    )
+    await conn.execute(
+        "UPDATE waybill_daily_seq SET seq = seq + 1 WHERE biz_date = ?",
+        (biz_date,),
+    )
+    async with conn.execute(
+        "SELECT seq FROM waybill_daily_seq WHERE biz_date = ?",
+        (biz_date,),
+    ) as cur:
+        row = await cur.fetchone()
+    seq = int(row["seq"] if row else 1)
+    return f"WB{biz_date}{seq:04d}"
+
+
 async def create_shipment(
     customer_name: str,
     product_name: str,
@@ -152,25 +172,30 @@ async def create_shipment(
     token = None
     shipment_id = _generate_id("SHIP")
     order_id = _generate_id("ORD")
-
     async with get_conn() as conn:
-        await conn.execute(
-            """INSERT INTO shipments
-               (shipment_id, order_id, ship_type, status,
-                customer_name, delivery_address, product_name, quantity,
-                driver_token, customer_phone,
-                total_weight, unit_price, delivery_fee, freight_fee,
-                receiver_province, receiver_city, receiver_district)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                shipment_id, order_id, ship_type, status,
-                customer_name, delivery_address, product_name, quantity,
-                token, customer_phone,
-                total_weight, unit_price, delivery_fee, freight_fee,
-                receiver_province, receiver_city, receiver_district,
-            ),
-        )
-        await conn.commit()
+        await conn.execute('BEGIN IMMEDIATE')
+        try:
+            waybill_no = await _next_waybill_no(conn)
+            await conn.execute(
+                """INSERT INTO shipments
+                   (shipment_id, order_id, waybill_no, ship_type, status,
+                    customer_name, delivery_address, product_name, quantity,
+                    driver_token, customer_phone,
+                    total_weight, unit_price, delivery_fee, freight_fee,
+                    receiver_province, receiver_city, receiver_district)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    shipment_id, order_id, waybill_no, ship_type, status,
+                    customer_name, delivery_address, product_name, quantity,
+                    token, customer_phone,
+                    total_weight, unit_price, delivery_fee, freight_fee,
+                    receiver_province, receiver_city, receiver_district,
+                ),
+            )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
     return shipment_id
 
 
@@ -203,19 +228,20 @@ async def create_order_with_items(
     receiver_district = order_payload.get('receiver_district', '')
 
     async with get_conn() as conn:
-        await conn.execute('BEGIN TRANSACTION')
+        await conn.execute('BEGIN IMMEDIATE')
         try:
+            waybill_no = await _next_waybill_no(conn)
             await conn.execute(
                 """INSERT INTO shipments
-                   (shipment_id, order_id, ship_type, status,
+                   (shipment_id, order_id, waybill_no, ship_type, status,
                     customer_name, delivery_address, product_name, quantity,
                     driver_token, customer_phone, pickup_method, payment_method,
                     total_weight, unit_price, delivery_fee, freight_fee,
                     freight_fee_mode, unit_price_source,
                     receiver_province, receiver_city, receiver_district)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    shipment_id, order_id, ship_type, status,
+                    shipment_id, order_id, waybill_no, ship_type, status,
                     customer_name, delivery_address, product_name, quantity,
                     token, customer_phone, pickup_method, payment_method,
                     total_weight, unit_price, delivery_fee, freight_fee,
@@ -224,19 +250,22 @@ async def create_order_with_items(
                 ),
             )
 
-            for p in items:
+            for i, p in enumerate(items, start=1):
                 raw_json = json.dumps(p, ensure_ascii=False)
                 qty = int(p.get('qty', p.get('quantity', 0)) or 0)
                 unit_weight = float(p.get('unit_weight_kg', 0) or 0)
                 line_weight = float(p.get('line_weight_kg', round(unit_weight * qty, 3)) or 0)
+                line_no = i * 10
                 await conn.execute(
                     """INSERT INTO shipment_products
-                       (shipment_id, product_name, spec, quantity,
+                       (shipment_id, waybill_no, line_no, product_name, spec, quantity,
                         parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
                         raw_data)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         shipment_id,
+                        waybill_no,
+                        line_no,
                         p.get('name', p.get('product_name', '')),
                         p.get('spec', ''),
                         qty,
@@ -578,23 +607,33 @@ async def save_shipment_products(
     products 格式: [{'name': str, 'spec': str, 'qty': int, ...任意其他字典项...}, ...]
     """
     async with get_conn() as conn:
+        async with conn.execute(
+            "SELECT waybill_no FROM shipments WHERE shipment_id = ?",
+            (shipment_id,),
+        ) as cur:
+            ship = await cur.fetchone()
+        waybill_no = (ship['waybill_no'] if ship else '') or ''
+
         await conn.execute(
             "DELETE FROM shipment_products WHERE shipment_id = ?",
             (shipment_id,),
         )
-        for p in products:
+        for i, p in enumerate(products, start=1):
             raw_json = json.dumps(p, ensure_ascii=False)
             qty = int(p.get('qty', p.get('quantity', 0)) or 0)
             unit_weight = float(p.get('unit_weight_kg', 0) or 0)
             line_weight = float(p.get('line_weight_kg', round(unit_weight * qty, 3)) or 0)
+            line_no = i * 10
             await conn.execute(
                 """INSERT INTO shipment_products
-                   (shipment_id, product_name, spec, quantity,
+                   (shipment_id, waybill_no, line_no, product_name, spec, quantity,
                     parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
                     raw_data)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     shipment_id,
+                    waybill_no,
+                    line_no,
                     p.get('name', p.get('product_name', '')),
                     p.get('spec', ''),
                     qty,
@@ -614,9 +653,10 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
     async with get_conn() as conn:
         async with conn.execute(
             """SELECT id, product_name, spec, quantity,
+                      line_no,
                       parsed_spec, unit_weight_kg, line_weight_kg, weight_source, weight_locked,
                       raw_data
-               FROM shipment_products WHERE shipment_id = ? ORDER BY id""",
+               FROM shipment_products WHERE shipment_id = ? ORDER BY line_no, id""",
             (shipment_id,),
         ) as cur:
             rows = await cur.fetchall()
@@ -633,6 +673,7 @@ async def get_shipment_products(shipment_id: str) -> list[dict]:
         # ── 标准化核心字段（以 DB 列名为准，兼容旧数据）──
         merged: dict = {
             "id":           item.get("id"),
+            "line_no":      int(item.get("line_no") or raw_dict.get("line_no") or 0),
             "product_name": item.get("product_name") or raw_dict.get("name") or "",
             "spec":         item.get("spec") or raw_dict.get("spec") or "",
             "quantity":     item.get("quantity") or raw_dict.get("qty") or 0,
