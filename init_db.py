@@ -3,6 +3,7 @@
 支持重复调用，仅在表不存在时创建。
 """
 import sqlite3
+import datetime
 from pathlib import Path
 
 DB_PATH: str = str(Path(__file__).parent / "logistics.db")
@@ -83,6 +84,7 @@ def init_db() -> None:
         ("receiver_district",   "TEXT DEFAULT ''"),
         ("freight_fee_mode",    "TEXT DEFAULT 'auto'"),
         ("unit_price_source",   "TEXT DEFAULT 'manual_input'"),
+        ("waybill_no",          "TEXT DEFAULT ''"),
     ]
     for col_name, col_def in _add_columns:
         try:
@@ -95,6 +97,8 @@ def init_db() -> None:
     CREATE TABLE IF NOT EXISTS shipment_products (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         shipment_id  TEXT NOT NULL,
+        waybill_no   TEXT DEFAULT '',
+        line_no      INTEGER DEFAULT 0,
         product_name TEXT,
         spec         TEXT,
         quantity     INTEGER DEFAULT 0,
@@ -113,6 +117,8 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         pass  # 列已存在，忽略
     for col_name, col_def in [
+        ("waybill_no", "TEXT DEFAULT ''"),
+        ("line_no", "INTEGER DEFAULT 0"),
         ("parsed_spec", "TEXT DEFAULT ''"),
         ("unit_weight_kg", "REAL DEFAULT 0"),
         ("line_weight_kg", "REAL DEFAULT 0"),
@@ -123,6 +129,18 @@ def init_db() -> None:
             cur.execute(f"ALTER TABLE shipment_products ADD COLUMN {col_name} {col_def}")
         except sqlite3.OperationalError:
             pass
+
+    # ── 日序列表（生成可读日期的托运单号） ──
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS waybill_daily_seq (
+        biz_date TEXT PRIMARY KEY,
+        seq      INTEGER NOT NULL
+    )
+    """)
+
+    # ── 唯一索引 ──
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_waybill_no ON shipments(waybill_no) WHERE waybill_no <> ''")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_shipment_products_waybill_line ON shipment_products(waybill_no, line_no) WHERE waybill_no <> '' AND line_no > 0")
 
     # ── 商品明细重量修改留痕 ──
     cur.execute("""
@@ -187,6 +205,61 @@ def init_db() -> None:
             [(r[0], r[1], r[2] or 0) for r in backfill_rows],
         )
         print(f"[init_db] 回填了 {len(backfill_rows)} 条历史发货单的商品明细。")
+
+    # ── 回填：历史发货单的 waybill_no（按创建日期递增） ──
+    cur.execute("""
+        SELECT shipment_id, created_at
+        FROM shipments
+        WHERE IFNULL(waybill_no, '') = ''
+        ORDER BY datetime(created_at) ASC, shipment_id ASC
+    """)
+    rows = cur.fetchall()
+    seq_map: dict[str, int] = {}
+    for shipment_id, created_at in rows:
+        try:
+            dt = datetime.datetime.fromisoformat((created_at or '').replace('/', '-'))
+            biz_date = dt.strftime('%Y%m%d')
+        except Exception:
+            biz_date = datetime.datetime.now().strftime('%Y%m%d')
+        seq_map[biz_date] = seq_map.get(biz_date, 0) + 1
+        waybill_no = f"WB{biz_date}{seq_map[biz_date]:04d}"
+        cur.execute(
+            "UPDATE shipments SET waybill_no = ? WHERE shipment_id = ?",
+            (waybill_no, shipment_id),
+        )
+
+    # ── 同步日序列表到当前最大值 ──
+    cur.execute("""
+        SELECT SUBSTR(waybill_no, 3, 8) AS biz_date,
+               MAX(CAST(SUBSTR(waybill_no, 11, 4) AS INTEGER)) AS max_seq
+        FROM shipments
+        WHERE waybill_no LIKE 'WB____________'
+        GROUP BY SUBSTR(waybill_no, 3, 8)
+    """)
+    for biz_date, max_seq in cur.fetchall():
+        if not biz_date:
+            continue
+        cur.execute(
+            "INSERT INTO waybill_daily_seq (biz_date, seq) VALUES (?, ?) "
+            "ON CONFLICT(biz_date) DO UPDATE SET seq = CASE WHEN excluded.seq > seq THEN excluded.seq ELSE seq END",
+            (biz_date, int(max_seq or 0)),
+        )
+
+    # ── 回填：明细行 line_no 与 waybill_no ──
+    cur.execute("""
+        SELECT sp.id, sp.shipment_id, s.waybill_no
+        FROM shipment_products sp
+        JOIN shipments s ON s.shipment_id = sp.shipment_id
+        ORDER BY sp.shipment_id ASC, sp.id ASC
+    """)
+    line_tracker: dict[str, int] = {}
+    for row_id, shipment_id, waybill_no in cur.fetchall():
+        next_line = line_tracker.get(shipment_id, 0) + 10
+        line_tracker[shipment_id] = next_line
+        cur.execute(
+            "UPDATE shipment_products SET waybill_no = ?, line_no = ? WHERE id = ?",
+            (waybill_no or '', next_line, row_id),
+        )
 
     conn.commit()
     conn.close()
